@@ -7,11 +7,13 @@
 - **自动发现**：启动时扫描所有 tmux pane，绑定正在运行的 Claude Code 进程（PID）
 - **持续轮询**：每 1.5 秒检测一次 pane 状态，识别权限申请、Plan 审批、任务完成等场景
 - **弹窗交互**：检测到需要输入时，在当前 pane 旁弹出 curses TUI，展示上下文、问题和选项
+- **Plan 文件读取**：Plan 审批场景自动从 `~/.claude/plans/` 读取 plan 文件内容，在弹窗中渲染完整 Plan
 - **Hook 集成**：接收 Claude Code hooks 推送的结构化数据（tool_name、tool_input），与 buffer 检测合并，提供更丰富的弹窗内容
 - **双确认模式**：可配置为 hook + buffer 同时匹配才弹窗，减少误触发
 - **Rich Markdown 渲染**：弹窗上下文使用 rich 库渲染 markdown，支持语法高亮
 - **可配置触发词**：每个场景的触发条件（正则 + 关键词）均可在配置文件中自定义
 - **聚焦跳转**：弹窗中可选择直接跳转到对应 pane
+- **macOS 服务**：提供 launchd 服务配置，支持开机自启和后台运行
 
 ## 安装
 
@@ -20,7 +22,26 @@
 ```bash
 git clone <repo>
 cd claude-code-tmux-notify
-uv sync
+```
+
+### 一键安装（推荐）
+
+使用 `service.sh` 脚本完成 CLI 工具安装、配置文件部署和 launchd 服务注册：
+
+```bash
+./service.sh install
+```
+
+这会：
+1. 通过 `uv tool install` 将 `claude-code-tmux-notify` 安装为全局 CLI 命令
+2. 将 `config.toml.default` 复制到 `~/.config/claude-code-tmux-notify/config.toml`（已存在时可选覆盖或 diff）
+3. 注册 macOS LaunchAgent，支持后续通过 `service.sh` 管理服务
+
+### 手动安装
+
+```bash
+uv sync                    # 仅开发模式
+uv tool install -e .       # 安装为全局 CLI
 ```
 
 ### 配置 Claude Code Hooks（推荐）
@@ -28,7 +49,7 @@ uv sync
 一键将 hook 配置写入 `~/.claude/settings.json`，让 Claude Code 主动推送事件：
 
 ```bash
-uv run python main.py --setup-hooks
+claude-code-tmux-notify --setup-hooks
 ```
 
 这会为 `PreToolUse`、`PermissionRequest`、`Notification`、`Stop` 四个事件注册 HTTP hook，指向本地 `127.0.0.1:19836`。已有的 hooks 配置不会被覆盖。
@@ -38,7 +59,7 @@ uv run python main.py --setup-hooks
 ## 使用
 
 ```
-uv run python main.py [选项]
+claude-code-tmux-notify [选项]
 
 选项：
   --poll-interval FLOAT       状态轮询间隔，秒（默认 1.5）
@@ -54,8 +75,23 @@ uv run python main.py [选项]
 开启详细日志：
 
 ```bash
-uv run python main.py -v
+claude-code-tmux-notify -v
 ```
+
+### 服务管理
+
+通过 `service.sh` 管理 macOS launchd 后台服务：
+
+```bash
+./service.sh start      # 启动服务
+./service.sh stop       # 停止服务
+./service.sh restart    # 重启服务
+./service.sh status     # 查看服务状态
+./service.sh logs       # 查看日志（tail -f）
+./service.sh uninstall  # 卸载服务
+```
+
+日志路径：`~/Library/Logs/claude-code-tmux-notify/`
 
 ## 弹窗操作
 
@@ -72,14 +108,21 @@ uv run python main.py -v
 
 ## 配置
 
-配置文件位于 `~/.config/claude-code-tmux-notify/config.toml`，所有字段均可选，缺省时使用内置默认值。
+配置文件位于 `~/.config/claude-code-tmux-notify/config.toml`，所有字段均可选，缺省时使用内置默认值。默认配置模板见 `config.toml.default`。
+
+### 全局设置
+
+```toml
+# 缓冲区捕获行数
+buffer_lines = 25
+```
 
 ### 弹窗位置
 
 ```toml
 [popup]
-width  = "80%"
-height = "60%"
+width  = "25%"
+height = "25%"
 x      = "R"    # R = 右侧，C = 居中，或像素值
 y      = "0"    # 0 = 顶部，或像素值
 ```
@@ -124,16 +167,20 @@ patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 ## 架构
 
 ```
-main.py                CLI 入口，解析参数，启动 Monitor
 claude_code_tmux_notify/
+  cli.py               CLI 入口，解析参数，启动 Monitor
   monitor.py           主循环：发现、轮询、hook 合并、弹窗调度
-  detector.py          buffer 解析：TriggerMatcher、TriggerEvent、HookData
+  detector.py          buffer 解析：TriggerMatcher、TriggerEvent、HookData、Plan 文件读取
   hook_server.py       HTTP hook 服务器：HookServer、HookStore、PaneCorrelator
   setup_hooks.py       CLI 工具：配置 ~/.claude/settings.json 中的 hooks
   config.py            TOML 配置加载：PopupConfig、HookServerConfig、TriggersConfig
   popup.py             curses TUI 弹窗，rich markdown 渲染
   responder.py         将弹窗选择转换为 tmux send-keys 发回 Claude Code
   tmux.py              tmux CLI 异步封装
+main.py                旧入口（兼容），等同于 cli.py
+config.toml.default    默认配置模板
+service.sh             macOS launchd 服务管理脚本
+com.july.claude-code-tmux-notify.plist  LaunchAgent 配置
 ```
 
 ### 数据流

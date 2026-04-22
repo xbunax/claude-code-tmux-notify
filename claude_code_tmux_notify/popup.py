@@ -269,15 +269,19 @@ _RICH_THEME = Theme({
 
 
 def _render_markdown_ansi(
-    context_lines: list[str], width: int, hook_data: dict | None = None
+    context_lines: list[str], width: int, hook_data: dict | None = None,
+    scenario: str | None = None,
 ) -> list[str]:
-    """Render hook data as markdown using rich, return ANSI-formatted lines.
+    """Render hook data (and plan content) as markdown via rich, return ANSI lines.
 
-    Only hook_data is used for content rendering; buffer context_lines are ignored.
+    For plan scenarios, context_lines (the plan text from the tmux buffer) are
+    rendered as the primary content.  For other scenarios, hook_data is used.
     """
     parts: list[str] = []
 
-    if hook_data:
+    if scenario == "plan" and context_lines:
+        parts.append("\n".join(context_lines))
+    elif hook_data:
         tool_name = hook_data.get("tool_name")
         tool_input = hook_data.get("tool_input")
         if tool_name:
@@ -289,6 +293,9 @@ def _render_markdown_ansi(
                     parts.append(f"`{tool_input['file_path']}`")
                 elif tool_name == "Grep" and "pattern" in tool_input:
                     parts.append(f"`{tool_input['pattern']}`")
+                elif tool_name in ("ExitPlanMode", "EnterPlanMode", "EnterWorktree",
+                                   "ExitWorktree", "CronList", "TaskList", "TaskGet"):
+                    pass  # 只显示工具名，不显示参数
                 else:
                     import json as _json
                     parts.append(f"```json\n{_json.dumps(tool_input, indent=2, ensure_ascii=False)}\n```")
@@ -373,7 +380,7 @@ def _draw(
     # --- Context rendered via rich markdown (with optional hook data) ---
     # Use a dark-gray background (256-color 236) to visually distinguish context
     ctx_bg = 236 if curses.COLORS >= 256 else curses.COLOR_BLACK
-    ansi_lines = _render_markdown_ansi(context, usable_w, hook_data)
+    ansi_lines = _render_markdown_ansi(context, usable_w, hook_data, scenario)
     for line in ansi_lines:
         if row >= max_y - reserved:
             break

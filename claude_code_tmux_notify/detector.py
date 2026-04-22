@@ -78,6 +78,28 @@ _SPINNER_RE = re.compile(r"^[✽✢✻⏺]\s+\S+…")
 _IDLE_RE = re.compile(r"^❯\s*$")
 # Help text at bottom of prompts
 _HELP_RE = re.compile(r"^\s*(Esc to cancel|ctrl-g to edit|shift\+tab)")
+# Plan file path patterns:
+#   "Plan saved to: ~/.claude/plans/xxx.md"
+#   "ctrl-g to edit in Nvim · ~/.claude/plans/xxx.md"
+_PLAN_PATH_PATTERNS = [
+    re.compile(r"Plan saved to:\s*(\S+\.md)"),
+    re.compile(r"ctrl-g to edit.*?·\s*(\S+\.md)"),
+]
+
+
+def _read_plan_from_buffer(tail: list[str]) -> list[str]:
+    """Extract plan file path from buffer lines and read the file content."""
+    for line in tail:
+        for pat in _PLAN_PATH_PATTERNS:
+            m = pat.search(line)
+            if m:
+                path = os.path.expanduser(m.group(1))
+                try:
+                    with open(path) as f:
+                        return f.read().splitlines()
+                except OSError:
+                    log.debug("Failed to read plan file: %s", path)
+    return []
 
 
 # --- Configurable trigger matchers ---
@@ -240,7 +262,12 @@ def parse_buffer(text: str, triggers: CompiledTriggers) -> DetectedState:
                 sep_idx = j + 1
                 break
 
-        context_lines = [l for l in tail[sep_idx:proceed_idx] if l.strip()]
+        if prompt_type == "plan":
+            # Plan: find the plan file path from buffer and read it directly
+            context_lines = _read_plan_from_buffer(tail)
+        else:
+            # Permission: grab content between separator and question (tool info)
+            context_lines = [l for l in tail[sep_idx:proceed_idx] if l.strip()]
 
         question = tail[proceed_idx].strip()
 

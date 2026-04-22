@@ -7,4 +7,4 @@ requires-python = ">=3.13"
 dependencies = ["rich>=13.0", "pygments>=2.16"]
 
 [project.scripts]
-claude-code-tmux-notify = "main:main"
+claude-code-tmux-notify = "claude_code_tmux_notify.cli:main"
