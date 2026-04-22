@@ -417,6 +417,8 @@ def _draw(
 
         row += 1
         help_text = "↑↓ select · Enter confirm · Esc cancel"
+        if scenario == "plan":
+            help_text = "↑↓ select · Enter confirm · Ctrl-G edit · Esc cancel"
         if row < max_y:
             try:
                 stdscr.addnstr(
@@ -498,6 +500,9 @@ def _main(stdscr: curses.window, args: argparse.Namespace) -> str | None:
                 return "focus"
             else:
                 return f"option:{selected}"
+        elif key == "\x07":  # Ctrl-G
+            if args.scenario == "plan" and getattr(args, "plan_file_path", None):
+                return f"edit_plan:{args.plan_file_path}"
         elif key == "\x1b":
             return None
         elif isinstance(key, str) and "1" <= key <= "9":
@@ -525,6 +530,7 @@ def main() -> None:
     args.session_name = cfg.get("session_name", "")
     args.pane_id = cfg.get("pane_id", "")
     args.hook_data = cfg.get("hook_data")
+    args.plan_file_path = cfg.get("plan_file_path")
 
     result = curses.wrapper(_main, args)
 

@@ -30,6 +30,7 @@ class DetectedState:
     options: list[str] = dataclasses.field(default_factory=list)
     selected_index: int = 0
     context_lines: list[str] = dataclasses.field(default_factory=list)
+    plan_file_path: str | None = None
     help_text: str | None = None
 
 
@@ -59,6 +60,7 @@ class TriggerEvent:
     options: list[str]
     selected_index: int
     hook_data: HookData | None = None
+    plan_file_path: str | None = None
 
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
@@ -87,8 +89,11 @@ _PLAN_PATH_PATTERNS = [
 ]
 
 
-def _read_plan_from_buffer(tail: list[str]) -> list[str]:
-    """Extract plan file path from buffer lines and read the file content."""
+def _read_plan_from_buffer(tail: list[str]) -> tuple[list[str], str | None]:
+    """Extract plan file path from buffer lines and read the file content.
+
+    Returns (content_lines, expanded_file_path).
+    """
     for line in tail:
         for pat in _PLAN_PATH_PATTERNS:
             m = pat.search(line)
@@ -96,10 +101,11 @@ def _read_plan_from_buffer(tail: list[str]) -> list[str]:
                 path = os.path.expanduser(m.group(1))
                 try:
                     with open(path) as f:
-                        return f.read().splitlines()
+                        return f.read().splitlines(), path
                 except OSError:
                     log.debug("Failed to read plan file: %s", path)
-    return []
+                    return [], path
+    return [], None
 
 
 # --- Configurable trigger matchers ---
@@ -173,6 +179,7 @@ async def build_trigger_event(
         options=state.options,
         selected_index=state.selected_index,
         hook_data=hd,
+        plan_file_path=state.plan_file_path,
     )
 
 
@@ -264,10 +271,11 @@ def parse_buffer(text: str, triggers: CompiledTriggers) -> DetectedState:
 
         if prompt_type == "plan":
             # Plan: find the plan file path from buffer and read it directly
-            context_lines = _read_plan_from_buffer(tail)
+            context_lines, plan_file_path = _read_plan_from_buffer(tail)
         else:
             # Permission: grab content between separator and question (tool info)
             context_lines = [l for l in tail[sep_idx:proceed_idx] if l.strip()]
+            plan_file_path = None
 
         question = tail[proceed_idx].strip()
 
@@ -278,6 +286,7 @@ def parse_buffer(text: str, triggers: CompiledTriggers) -> DetectedState:
             options=options,
             selected_index=selected_index,
             context_lines=context_lines,
+            plan_file_path=plan_file_path,
             help_text=help_text,
         )
 

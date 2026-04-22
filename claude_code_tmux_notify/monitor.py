@@ -224,52 +224,75 @@ class Monitor:
         if pane_id in self.active_popups:
             return
         self.active_popups.add(pane_id)
-        log.info(
-            "Showing popup for %s: %s (%d options)",
-            pane_id,
-            event.scenario,
-            len(event.options),
-        )
 
-        result_file = tempfile.mktemp(prefix="claude-code-tmux-notify-", suffix=".txt")
-        config_file = tempfile.mktemp(prefix="claude-code-tmux-notify-cfg-", suffix=".json")
         try:
-            config = event.to_dict()
-            config["result_file"] = result_file
-            with open(config_file, "w") as f:
-                json.dump(config, f, ensure_ascii=False)
+            while True:
+                log.info(
+                    "Showing popup for %s: %s (%d options)",
+                    pane_id,
+                    event.scenario,
+                    len(event.options),
+                )
 
-            popup_script = os.path.join(os.path.dirname(__file__), "popup.py")
-            cmd = [sys.executable, popup_script, "--config", config_file]
+                result_file = tempfile.mktemp(prefix="claude-code-tmux-notify-", suffix=".txt")
+                config_file = tempfile.mktemp(prefix="claude-code-tmux-notify-cfg-", suffix=".json")
+                try:
+                    config = event.to_dict()
+                    config["result_file"] = result_file
+                    with open(config_file, "w") as f:
+                        json.dump(config, f, ensure_ascii=False)
 
-            title = f" Claude Code: {event.scenario} — {event.project_name} "
-            pcfg = self.config.popup
-            active = await tmux.get_active_pane_id()
-            target = active if active else pane_id
-            rc = await tmux.display_popup(
-                target, cmd, title=title,
-                width=pcfg.width, height=pcfg.height,
-                x=pcfg.x, y=pcfg.y,
-            )
+                    popup_script = os.path.join(os.path.dirname(__file__), "popup.py")
+                    cmd = [sys.executable, popup_script, "--config", config_file]
 
-            if rc == 0 and os.path.exists(result_file):
-                with open(result_file) as f:
-                    result = f.read().strip()
-                log.info("Popup result for %s: %s", pane_id, result)
-                await self._handle_popup_result(pane_id, state, result)
-            else:
-                log.info("Popup cancelled for %s", pane_id)
+                    title = f" Claude Code: {event.scenario} — {event.project_name} "
+                    pcfg = self.config.popup
+                    active = await tmux.get_active_pane_id()
+                    target = active if active else pane_id
+                    rc = await tmux.display_popup(
+                        target, cmd, title=title,
+                        width=pcfg.width, height=pcfg.height,
+                        x=pcfg.x, y=pcfg.y,
+                    )
+
+                    if rc == 0 and os.path.exists(result_file):
+                        with open(result_file) as f:
+                            result = f.read().strip()
+                        log.info("Popup result for %s: %s", pane_id, result)
+                        action = await self._handle_popup_result(pane_id, state, result)
+                        if action == "reshow":
+                            # Re-detect state to get fresh plan content
+                            try:
+                                state = await detect_state(
+                                    pane_id, self.triggers, self.config.buffer_lines
+                                )
+                                if state.state != PaneState.NEEDS_INPUT:
+                                    log.info("Pane %s no longer needs input after edit", pane_id)
+                                    break
+                                hook_event = None
+                                session_id = self.correlator.get_session_id(pane_id)
+                                if session_id:
+                                    hook_event = self.hook_store.get_latest(session_id)
+                                event = await build_trigger_event(pane_id, state, hook_event)
+                            except RuntimeError:
+                                break
+                            continue
+                    else:
+                        log.info("Popup cancelled for %s", pane_id)
+                    break
+                finally:
+                    for f in (result_file, config_file):
+                        if os.path.exists(f):
+                            os.unlink(f)
         except Exception:
             log.exception("Popup error for %s", pane_id)
         finally:
-            for f in (result_file, config_file):
-                if os.path.exists(f):
-                    os.unlink(f)
             self.active_popups.discard(pane_id)
 
     async def _handle_popup_result(
         self, pane_id: str, state: DetectedState, result: str
-    ) -> None:
+    ) -> str | None:
+        """Handle popup result. Returns 'reshow' if the popup should be re-displayed."""
         if result.startswith("option:"):
             idx = int(result.split(":", 1)[1])
             await send_response(
@@ -293,6 +316,21 @@ class Monitor:
             )
         elif result == "focus":
             await self._focus_pane(pane_id)
+        elif result.startswith("edit_plan:"):
+            plan_path = result.split(":", 1)[1]
+            await self._open_plan_editor(pane_id, plan_path)
+            return "reshow"
+        return None
+
+    async def _open_plan_editor(self, pane_id: str, plan_path: str) -> None:
+        """Open nvim in a centered tmux popup to edit the plan file."""
+        active = await tmux.get_active_pane_id()
+        target = active if active else pane_id
+        await tmux.display_popup(
+            target, ["nvim", plan_path],
+            width="80%", height="80%",
+            title=" Edit Plan ",
+        )
 
     async def _focus_pane(self, pane_id: str) -> None:
         """Switch tmux focus to the given pane."""
