@@ -14,7 +14,8 @@ import sys
 DEFAULT_PORT = 19836
 SETTINGS_PATH = os.path.expanduser("~/.claude/settings.json")
 
-HOOK_EVENTS = ["PreToolUse", "PermissionRequest", "Notification", "Stop"]
+HOOK_EVENTS = ["PreToolUse", "PermissionRequest", "Notification"]
+ALL_HOOK_EVENTS = ["PreToolUse", "PermissionRequest", "Notification", "Stop"]
 
 
 def _build_hook_entry(port: int) -> dict:
@@ -29,8 +30,9 @@ def _build_hook_entry(port: int) -> dict:
     }
 
 
-def setup_hooks(port: int = DEFAULT_PORT) -> None:
+def setup_hooks(port: int = DEFAULT_PORT, all_events: bool = False) -> None:
     """Read, merge, and write hooks config into ~/.claude/settings.json."""
+    events = ALL_HOOK_EVENTS if all_events else HOOK_EVENTS
     # Ensure directory exists
     settings_dir = os.path.dirname(SETTINGS_PATH)
     os.makedirs(settings_dir, exist_ok=True)
@@ -52,7 +54,7 @@ def setup_hooks(port: int = DEFAULT_PORT) -> None:
     added: list[str] = []
     skipped: list[str] = []
 
-    for event in HOOK_EVENTS:
+    for event in events:
         event_hooks = hooks.setdefault(event, [])
         # Check if our hook URL is already configured
         already = any(
@@ -86,14 +88,18 @@ def setup_hooks(port: int = DEFAULT_PORT) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Configure Claude Code hooks for claude-code-tmux-notify"
+        description="Configure Claude Code hooks for agent-tmux-notify"
     )
     parser.add_argument(
         "--port", type=int, default=DEFAULT_PORT,
         help=f"Hook server port (default: {DEFAULT_PORT})",
     )
+    parser.add_argument(
+        "--all-events", action="store_true",
+        help="Register all hook events (PreToolUse, Stop, etc.) for debugging",
+    )
     args = parser.parse_args()
-    setup_hooks(port=args.port)
+    setup_hooks(port=args.port, all_events=args.all_events)
 
 
 if __name__ == "__main__":

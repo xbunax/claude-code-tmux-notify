@@ -88,7 +88,7 @@ async def display_popup(
     # properly quote the command as a single shell string.
     shell_cmd = shlex.join(command)
     # Add stderr logging for debugging
-    log_file = "/tmp/claude-code-tmux-notify-popup.log"
+    log_file = "/tmp/agent-tmux-notify-popup.log"
     shell_cmd = f"{shell_cmd} 2>>{shlex.quote(log_file)}"
 
     args = ["tmux", "display-popup", "-t", pane_id, "-w", width, "-h", height]

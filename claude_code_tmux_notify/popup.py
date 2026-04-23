@@ -1,7 +1,7 @@
 """Curses-based selector UI that runs inside a tmux display-popup.
 
 Usage (launched by monitor.py via tmux display-popup):
-    python -m claude_code_tmux_notify.popup --config /tmp/claude-code-tmux-notify-cfg-XXXX.json
+    python -m claude_code_tmux_notify.popup --config /tmp/agent-tmux-notify-cfg-XXXX.json
 
 Config JSON keys (TriggerEvent format):
     project_name, session_name, pane_id, scenario, content, question,
@@ -419,6 +419,8 @@ def _draw(
         help_text = "↑↓ select · Enter confirm · Esc cancel"
         if scenario == "plan":
             help_text = "↑↓ select · Enter confirm · Ctrl-G edit · Esc cancel"
+        elif scenario == "idle":
+            help_text = "Enter 聚焦 · Esc 关闭"
         if row < max_y:
             try:
                 stdscr.addnstr(
@@ -449,16 +451,17 @@ def _main(stdscr: curses.window, args: argparse.Namespace) -> str | None:
     _init_colors()
     stdscr.timeout(-1)
 
-    options: list[str] = list(args.options)
-    options.append(FOCUS_OPTION)
-    options.append(CUSTOM_OPTION)
-
     selected = args.selected
     context = args.context
     question = args.question
     scenario = args.scenario
     project_name = args.project_name
     hook_data = args.hook_data
+
+    options: list[str] = list(args.options)
+    options.append(FOCUS_OPTION)
+    if scenario != "idle":
+        options.append(CUSTOM_OPTION)
 
     input_mode = False
     input_buf = ""

@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.july.claude-code-tmux-notify"
+LABEL="com.july.agent-tmux-notify"
 PLIST_NAME="${LABEL}.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_SRC="${SCRIPT_DIR}/${PLIST_NAME}"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}"
-LOG_DIR="$HOME/Library/Logs/claude-code-tmux-notify"
+LOG_DIR="$HOME/Library/Logs/agent-tmux-notify"
 
 usage() {
     echo "Usage: $0 {install|uninstall|start|stop|restart|status|logs}"
@@ -14,7 +14,7 @@ usage() {
 }
 
 install_config() {
-    local CONFIG_DIR="$HOME/.config/claude-code-tmux-notify"
+    local CONFIG_DIR="$HOME/.config/agent-tmux-notify"
     local CONFIG_SRC="${SCRIPT_DIR}/config.toml.default"
     local CONFIG_DST="${CONFIG_DIR}/config.toml"
     mkdir -p "$CONFIG_DIR"

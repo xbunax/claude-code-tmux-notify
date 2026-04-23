@@ -35,7 +35,7 @@ def main() -> None:
         "--config",
         type=str,
         default=None,
-        help="Path to config TOML file (default: ~/.config/claude-code-tmux-notify/config.toml)",
+        help="Path to config TOML file (default: ~/.config/agent-tmux-notify/config.toml)",
     )
     parser.add_argument(
         "--hook-port",
@@ -52,6 +52,27 @@ def main() -> None:
         "--setup-hooks",
         action="store_true",
         help="Configure Claude Code hooks in ~/.claude/settings.json and exit",
+    )
+    parser.add_argument(
+        "--enable-buffer-detection",
+        action="store_true",
+        help="Enable tmux buffer polling (overrides config)",
+    )
+    parser.add_argument(
+        "--disable-buffer-detection",
+        action="store_true",
+        help="Disable tmux buffer polling (overrides config)",
+    )
+    parser.add_argument(
+        "--dump-hook-payloads",
+        action="store_true",
+        help="Dump raw hook payloads to JSONL file for debugging",
+    )
+    parser.add_argument(
+        "--dump-path",
+        type=str,
+        default=None,
+        help="Path for hook payload dump file (default: /tmp/claude-code-hook-payloads.jsonl)",
     )
     args = parser.parse_args()
 
@@ -84,6 +105,18 @@ def main() -> None:
     if args.hook_port is not None and monitor.hook_server is not None:
         monitor.config.hook_server.port = args.hook_port
         monitor.hook_server.port = args.hook_port
+    if args.enable_buffer_detection:
+        monitor.config.buffer_detection.enabled = True
+    if args.disable_buffer_detection:
+        monitor.config.buffer_detection.enabled = False
+    if args.dump_hook_payloads:
+        monitor.config.hook_server.dump_payloads = True
+    if args.dump_path:
+        monitor.config.hook_server.dump_path = args.dump_path
+    # Apply dumper after CLI overrides (Monitor.__init__ creates it too early)
+    if monitor.config.hook_server.dump_payloads and monitor.hook_server is not None:
+        from claude_code_tmux_notify.hook_server import PayloadDumper
+        monitor.hook_server._dumper = PayloadDumper(monitor.config.hook_server.dump_path)
 
     try:
         asyncio.run(monitor.run())

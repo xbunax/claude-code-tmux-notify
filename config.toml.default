@@ -1,8 +1,11 @@
-# claude-code-tmux-notify 配置文件
-# 路径: ~/.config/claude-code-tmux-notify/config.toml
+# agent-tmux-notify 配置文件
+# 路径: ~/.config/agent-tmux-notify/config.toml
 
 # 缓冲区行数
 buffer_lines = 25
+
+[buffer_detection]
+enabled = false   # true = 启用 tmux buffer 轮询检测
 
 [popup]
 width = "25%"
@@ -15,7 +18,8 @@ enabled = true
 host = "127.0.0.1"
 port = 19836
 ttl = 30.0
-require_hook = false   # true = 双确认模式
+dump_payloads = false
+dump_path = "/tmp/claude-code-hook-payloads.jsonl"
 
 [triggers.permission]
 patterns = ['Do you want to .*\?', 'Would you like to .*\?']

@@ -9,7 +9,12 @@ import tomllib
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/claude-code-tmux-notify/config.toml")
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/agent-tmux-notify/config.toml")
+
+
+@dataclasses.dataclass
+class BufferDetectionConfig:
+    enabled: bool = False  # 默认关闭，使用 hook 驱动
 
 
 @dataclasses.dataclass
@@ -18,7 +23,8 @@ class HookServerConfig:
     host: str = "127.0.0.1"
     port: int = 19836
     ttl: float = 30.0
-    require_hook: bool = False  # True = 双确认模式
+    dump_payloads: bool = False
+    dump_path: str = "/tmp/claude-code-hook-payloads.jsonl"
 
 
 @dataclasses.dataclass
@@ -63,6 +69,7 @@ def default_triggers() -> TriggersConfig:
 class Config:
     popup: PopupConfig = dataclasses.field(default_factory=PopupConfig)
     hook_server: HookServerConfig = dataclasses.field(default_factory=HookServerConfig)
+    buffer_detection: BufferDetectionConfig = dataclasses.field(default_factory=BufferDetectionConfig)
     triggers: TriggersConfig = dataclasses.field(default_factory=default_triggers)
     buffer_lines: int = 100
 
@@ -123,7 +130,14 @@ def load_config(path: str | None = None) -> Config:
             cfg.hook_server.port = int(hook["port"])
         if "ttl" in hook:
             cfg.hook_server.ttl = float(hook["ttl"])
-        if "require_hook" in hook:
-            cfg.hook_server.require_hook = bool(hook["require_hook"])
+        if "dump_payloads" in hook:
+            cfg.hook_server.dump_payloads = bool(hook["dump_payloads"])
+        if "dump_path" in hook:
+            cfg.hook_server.dump_path = str(hook["dump_path"])
+
+    buf_det = data.get("buffer_detection", {})
+    if buf_det:
+        if "enabled" in buf_det:
+            cfg.buffer_detection.enabled = bool(buf_det["enabled"])
 
     return cfg

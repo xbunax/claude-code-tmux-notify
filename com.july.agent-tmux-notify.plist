@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.july.claude-code-tmux-notify</string>
+    <string>com.july.agent-tmux-notify</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/july/.local/bin/claude-code-tmux-notify</string>
+        <string>/Users/july/.local/bin/agent-tmux-notify</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -22,9 +22,9 @@
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>/Users/july/Library/Logs/claude-code-tmux-notify/stdout.log</string>
+    <string>/Users/july/Library/Logs/agent-tmux-notify/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/july/Library/Logs/claude-code-tmux-notify/stderr.log</string>
+    <string>/Users/july/Library/Logs/agent-tmux-notify/stderr.log</string>
     <key>ThrottleInterval</key>
     <integer>5</integer>
 </dict>

@@ -1,18 +1,18 @@
-# claude-code-tmux-notify
+# agent-tmux-notify
 
 在 tmux 中监控 Claude Code CLI 实例，当需要用户输入时自动弹出交互窗口。
 
 ## 功能
 
 - **自动发现**：启动时扫描所有 tmux pane，绑定正在运行的 Claude Code 进程（PID）
-- **持续轮询**：每 1.5 秒检测一次 pane 状态，识别权限申请、Plan 审批、任务完成等场景
+- **双运行模式**：支持 buffer 轮询模式和 hook 驱动模式，可单独或组合使用。hook 驱动模式下可完全禁用 buffer 检测
 - **弹窗交互**：检测到需要输入时，在当前 pane 旁弹出 curses TUI，展示上下文、问题和选项
 - **Plan 文件读取**：Plan 审批场景自动从 `~/.claude/plans/` 读取 plan 文件内容，在弹窗中渲染完整 Plan
-- **Hook 集成**：接收 Claude Code hooks 推送的结构化数据（tool_name、tool_input），与 buffer 检测合并，提供更丰富的弹窗内容
-- **双确认模式**：可配置为 hook + buffer 同时匹配才弹窗，减少误触发
+- **Hook 驱动**：接收 Claude Code hooks 推送的 `PreToolUse`、`PermissionRequest`、`Notification` 等事件，直接触发弹窗并将用户决策回传给 Claude Code
+- **Idle 通知**：Claude Code 空闲等待输入时弹出通知，可一键聚焦到对应 pane
 - **Rich Markdown 渲染**：弹窗上下文使用 rich 库渲染 markdown，支持语法高亮
 - **可配置触发词**：每个场景的触发条件（正则 + 关键词）均可在配置文件中自定义
-- **聚焦跳转**：弹窗中可选择直接跳转到对应 pane
+- **聚焦跳转**：弹窗中可选择直接跳转到对应 pane（buffer 模式和 hook 模式均支持）
 - **macOS 服务**：提供 launchd 服务配置，支持开机自启和后台运行
 
 ## 安装
@@ -21,7 +21,7 @@
 
 ```bash
 git clone <repo>
-cd claude-code-tmux-notify
+cd agent-tmux-notify
 ```
 
 ### 一键安装（推荐）
@@ -33,8 +33,8 @@ cd claude-code-tmux-notify
 ```
 
 这会：
-1. 通过 `uv tool install` 将 `claude-code-tmux-notify` 安装为全局 CLI 命令
-2. 将 `config.toml.default` 复制到 `~/.config/claude-code-tmux-notify/config.toml`（已存在时可选覆盖或 diff）
+1. 通过 `uv tool install` 将 `agent-tmux-notify` 安装为全局 CLI 命令
+2. 将 `config.toml.default` 复制到 `~/.config/agent-tmux-notify/config.toml`（已存在时可选覆盖或 diff）
 3. 注册 macOS LaunchAgent，支持后续通过 `service.sh` 管理服务
 
 ### 手动安装
@@ -49,7 +49,7 @@ uv tool install -e .       # 安装为全局 CLI
 一键将 hook 配置写入 `~/.claude/settings.json`，让 Claude Code 主动推送事件：
 
 ```bash
-claude-code-tmux-notify --setup-hooks
+agent-tmux-notify --setup-hooks
 ```
 
 这会为 `PreToolUse`、`PermissionRequest`、`Notification`、`Stop` 四个事件注册 HTTP hook，指向本地 `127.0.0.1:19836`。已有的 hooks 配置不会被覆盖。
@@ -59,13 +59,13 @@ claude-code-tmux-notify --setup-hooks
 ## 使用
 
 ```
-claude-code-tmux-notify [选项]
+agent-tmux-notify [选项]
 
 选项：
   --poll-interval FLOAT       状态轮询间隔，秒（默认 1.5）
   --discovery-interval FLOAT  pane 发现扫描间隔，秒（默认 30）
   --debounce FLOAT            确认 NEEDS_INPUT 前的等待时间，秒（默认 3）
-  --config PATH               配置文件路径（默认 ~/.config/claude-code-tmux-notify/config.toml）
+  --config PATH               配置文件路径（默认 ~/.config/agent-tmux-notify/config.toml）
   --hook-port INT             Hook 服务器端口（默认 19836）
   --no-hook-server            禁用 Hook HTTP 服务器
   --setup-hooks               配置 Claude Code hooks 后退出
@@ -75,7 +75,7 @@ claude-code-tmux-notify [选项]
 开启详细日志：
 
 ```bash
-claude-code-tmux-notify -v
+agent-tmux-notify -v
 ```
 
 ### 服务管理
@@ -91,7 +91,7 @@ claude-code-tmux-notify -v
 ./service.sh uninstall  # 卸载服务
 ```
 
-日志路径：`~/Library/Logs/claude-code-tmux-notify/`
+日志路径：`~/Library/Logs/agent-tmux-notify/`
 
 ## 弹窗操作
 
@@ -100,15 +100,16 @@ claude-code-tmux-notify -v
 | `↑` / `↓` | 移动选择 |
 | `Enter` | 确认选项 |
 | `1`–`9` | 数字快选（对应 Claude Code 的选项编号） |
+| `Ctrl-G` | 编辑 Plan 文件（仅 plan 场景） |
 | `Esc` | 取消，关闭弹窗 |
 
 选项列表末尾固定追加两个特殊选项：
 - **[聚焦到此 pane]**：切换 tmux 焦点到对应的 Claude Code pane
-- **[自定义输入...]**：进入文本输入模式，发送任意内容
+- **[自定义输入...]**：进入文本输入模式，发送任意内容（idle 场景下不显示）
 
 ## 配置
 
-配置文件位于 `~/.config/claude-code-tmux-notify/config.toml`，所有字段均可选，缺省时使用内置默认值。默认配置模板见 `config.toml.default`。
+配置文件位于 `~/.config/agent-tmux-notify/config.toml`，所有字段均可选，缺省时使用内置默认值。默认配置模板见 `config.toml.default`。
 
 ### 全局设置
 
@@ -131,11 +132,18 @@ y      = "0"    # 0 = 顶部，或像素值
 
 ```toml
 [hook_server]
-enabled      = true         # 是否启用 hook HTTP 服务器
-host         = "127.0.0.1"
-port         = 19836
-ttl          = 30.0         # hook 事件过期时间，秒
-require_hook = false        # true = 双确认模式，hook + buffer 都匹配才弹窗
+enabled        = true         # 是否启用 hook HTTP 服务器
+host           = "127.0.0.1"
+port           = 19836
+ttl            = 30.0         # hook 事件过期时间，秒
+dump_payloads  = false        # 是否将 hook 原始 payload 写入文件（调试用）
+```
+
+### Buffer 检测
+
+```toml
+[buffer_detection]
+enabled = true    # 设为 false 可完全禁用 buffer 轮询，仅使用 hook 驱动模式
 ```
 
 ### 触发词配置
@@ -160,8 +168,9 @@ patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 
 | 场景 | 触发时机 | 弹窗行为 |
 |------|----------|----------|
-| `permission` | Claude Code 申请执行权限 | 展示工具调用内容，等待确认 |
-| `plan` | Claude Code 提交 Plan 等待审批 | 展示 Plan 摘要，等待确认 |
+| `permission` | Claude Code 申请执行权限 | 展示工具调用内容，等待确认（hook 模式下决策直接回传） |
+| `plan` | Claude Code 提交 Plan 等待审批 | 展示 Plan 摘要，支持 Ctrl-G 编辑后重新审批 |
+| `idle` | Claude Code 空闲等待用户输入 | 通知弹窗，可一键聚焦到对应 pane |
 | `completed` | 任务执行完成 | 短暂显示完成通知（2 秒后自动关闭） |
 
 ## 架构
@@ -180,7 +189,7 @@ claude_code_tmux_notify/
 main.py                旧入口（兼容），等同于 cli.py
 config.toml.default    默认配置模板
 service.sh             macOS launchd 服务管理脚本
-com.july.claude-code-tmux-notify.plist  LaunchAgent 配置
+com.july.agent-tmux-notify.plist  LaunchAgent 配置
 ```
 
 ### 数据流
@@ -188,21 +197,25 @@ com.july.claude-code-tmux-notify.plist  LaunchAgent 配置
 ```
 Claude Code ──[hook HTTP POST]──► HookServer (localhost:19836)
     │                                  │
+    │                          ┌───────┴───────┐
+    │                          ▼               ▼
+    │                    PreToolUse        PermissionRequest / Notification
+    │                    (缓存上下文)       (直接触发弹窗)
+    │                          │               │
+    │                          └───────┬───────┘
     │                                  ▼
-    │                             HookStore (内存, 30s TTL)
-    │                                  │
-    │                                  │ ◄── PaneCorrelator (CWD 匹配)
+    │                        PaneCorrelator (CWD 匹配 hook → pane)
     │                                  │
     ├──[tmux buffer]──► Monitor ──► detector.parse_buffer()
     │                                  │
     │                                  ▼
-    │                        合并 hook + buffer → TriggerEvent
+    │                        TriggerEvent → popup.py (rich markdown)
     │                                  │
-    │                                  ▼
-    │                             popup.py (rich markdown)
-    │                                  │
-    │                                  ▼
-    │                             responder.py (tmux send-keys)
+    │                          ┌───────┴───────┐
+    │                          ▼               ▼
+    │                    Buffer 模式:      Hook 模式:
+    │                    responder.py      决策回传 HookServer
+    │                    (tmux send-keys)  (JSON response)
 ```
 
 ### TriggerEvent JSON 结构
