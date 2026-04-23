@@ -1,17 +1,19 @@
-"""Async HTTP hook server, event store, and pane correlator.
+"""Async HTTP hook server, event store, pane correlator, and payload dumper.
 
-Receives Claude Code hook events via HTTP POST, stores them in memory,
-and correlates them with tmux panes by CWD matching.
+Receives Claude Code hook events via HTTP POST, routes them by event type,
+and supports blocking PermissionRequest handling with popup integration.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 import json
 import logging
 import time
 from collections import deque
+from typing import Any, Callable, Coroutine
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ class HookEvent:
     tool_input: dict | None = None
     cwd: str | None = None
     transcript_path: str | None = None
+    raw_payload: dict | None = None
     timestamp: float = dataclasses.field(default_factory=time.monotonic)
 
 
@@ -70,6 +73,23 @@ class HookStore:
                 del q[i]
                 return ev
         return None
+
+    def get_recent(
+        self, session_id: str, event_name: str, n: int = 5
+    ) -> list[HookEvent]:
+        """Return the last *n* events of *event_name* for a session."""
+        self._expire()
+        q = self._store.get(session_id)
+        if not q:
+            return []
+        result: list[HookEvent] = []
+        for ev in reversed(q):
+            if ev.hook_event_name == event_name:
+                result.append(ev)
+                if len(result) >= n:
+                    break
+        result.reverse()
+        return result
 
     def _expire(self) -> None:
         now = time.monotonic()
@@ -134,6 +154,61 @@ class PaneCorrelator:
 
 
 # ---------------------------------------------------------------------------
+# Payload dumper
+# ---------------------------------------------------------------------------
+
+class PayloadDumper:
+    """Append raw hook payloads to a JSONL file for debugging."""
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    def dump(self, data: dict) -> None:
+        entry = {
+            "_ts": datetime.datetime.now().isoformat(),
+            "_event": data.get("hook_event_name", ""),
+            **data,
+        }
+        try:
+            with open(self._path, "a") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            log.warning("Failed to dump payload to %s", self._path)
+
+
+# ---------------------------------------------------------------------------
+# Pending permission requests (blocking PermissionRequest support)
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class PendingPermission:
+    event: HookEvent
+    pane_id: str | None
+    future: asyncio.Future
+    raw_payload: dict
+
+
+class PendingPermissions:
+    """Registry for in-flight PermissionRequest events awaiting user decision."""
+
+    def __init__(self) -> None:
+        self._pending: dict[str, PendingPermission] = {}
+
+    def register(self, key: str, pp: PendingPermission) -> None:
+        self._pending[key] = pp
+
+    def resolve(self, key: str, decision: dict) -> bool:
+        pp = self._pending.pop(key, None)
+        if pp and not pp.future.done():
+            pp.future.set_result(decision)
+            return True
+        return False
+
+    def get(self, key: str) -> PendingPermission | None:
+        return self._pending.get(key)
+
+
+# ---------------------------------------------------------------------------
 # Minimal async HTTP server (stdlib only)
 # ---------------------------------------------------------------------------
 
@@ -161,8 +236,32 @@ _HTTP_405 = (
 )
 
 
+def _build_json_response(data: dict) -> bytes:
+    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    header = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: application/json\r\n"
+        b"Content-Length: " + str(len(body)).encode() + b"\r\n"
+        b"Connection: close\r\n"
+        b"\r\n"
+    )
+    return header + body
+
+
+# Callback type for permission request, notification, and pretooluse
+PermissionCallback = Callable[[str, "PendingPermission"], Coroutine[Any, Any, None]]
+NotificationCallback = Callable[[HookEvent, str | None, dict], Coroutine[Any, Any, None]]
+PreToolUseCallback = Callable[[HookEvent, str | None, dict], Coroutine[Any, Any, None]]
+
+
 class HookServer:
-    """Lightweight async HTTP server that receives Claude Code hook events."""
+    """Lightweight async HTTP server that receives Claude Code hook events.
+
+    Routes events by hook_event_name:
+    - PermissionRequest: blocks until user decides (via popup), returns decision
+    - Notification: returns 200 immediately, fires async callback
+    - Others: returns 200 immediately, stores for correlation
+    """
 
     def __init__(
         self,
@@ -170,11 +269,21 @@ class HookServer:
         correlator: PaneCorrelator,
         host: str = "127.0.0.1",
         port: int = 19836,
+        pending_permissions: PendingPermissions | None = None,
+        on_permission_request: PermissionCallback | None = None,
+        on_notification: NotificationCallback | None = None,
+        on_pretooluse: PreToolUseCallback | None = None,
+        dumper: PayloadDumper | None = None,
     ) -> None:
         self.store = store
         self.correlator = correlator
         self.host = host
         self.port = port
+        self.pending_permissions = pending_permissions or PendingPermissions()
+        self._on_permission_request = on_permission_request
+        self._on_notification = on_notification
+        self._on_pretooluse = on_pretooluse
+        self._dumper = dumper
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
@@ -237,13 +346,18 @@ class HookServer:
                 await writer.drain()
                 return
 
-            # Build HookEvent
+            # Dump raw payload if enabled
+            if self._dumper:
+                self._dumper.dump(data)
+
+            # Validate session_id
             session_id = data.get("session_id", "")
             if not session_id:
                 writer.write(_HTTP_400)
                 await writer.drain()
                 return
 
+            # Build HookEvent
             event = HookEvent(
                 session_id=session_id,
                 hook_event_name=data.get("hook_event_name", ""),
@@ -251,17 +365,49 @@ class HookServer:
                 tool_input=data.get("tool_input"),
                 cwd=data.get("cwd"),
                 transcript_path=data.get("transcript_path"),
+                raw_payload=data,
             )
 
+            # Store and correlate
             self.store.put(event)
-            self.correlator.correlate(event)
+            pane_id = self.correlator.correlate(event)
+
+            hook_name = event.hook_event_name
             log.debug(
-                "Hook received: %s %s (session=%s)",
-                event.hook_event_name,
+                "Hook received: %s %s (session=%s, pane=%s)",
+                hook_name,
                 event.tool_name or "",
                 event.session_id[:8],
+                pane_id or "?",
             )
 
+            # --- Route by event type ---
+
+            if hook_name == "PermissionRequest" and self._on_permission_request:
+                await self._handle_permission_request(
+                    writer, event, pane_id, data
+                )
+                return
+
+            if hook_name == "Notification" and self._on_notification:
+                # Return 200 immediately, fire callback async
+                writer.write(_HTTP_200)
+                await writer.drain()
+                asyncio.create_task(
+                    self._on_notification(event, pane_id, data)
+                )
+                return
+
+            if hook_name == "PreToolUse" and self._on_pretooluse:
+                # Return 200 immediately, fire callback async
+                writer.write(_HTTP_200)
+                await writer.drain()
+                asyncio.create_task(
+                    self._on_pretooluse(event, pane_id, data)
+                )
+                return
+
+            # Default: return 200 immediately (Stop, etc.)
             writer.write(_HTTP_200)
             await writer.drain()
 
@@ -275,3 +421,42 @@ class HookServer:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+    async def _handle_permission_request(
+        self,
+        writer: asyncio.StreamWriter,
+        event: HookEvent,
+        pane_id: str | None,
+        raw_payload: dict,
+    ) -> None:
+        """Handle PermissionRequest: block until user decides, return decision."""
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[dict] = loop.create_future()
+        request_key = f"{event.session_id}:{time.monotonic()}"
+
+        pp = PendingPermission(
+            event=event,
+            pane_id=pane_id,
+            future=future,
+            raw_payload=raw_payload,
+        )
+        self.pending_permissions.register(request_key, pp)
+
+        # Fire the callback (shows popup, resolves future when user decides)
+        asyncio.create_task(self._on_permission_request(request_key, pp))
+
+        # Block HTTP connection until user decides or timeout
+        try:
+            decision = await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            log.warning("PermissionRequest timed out for session %s", event.session_id[:8])
+            decision = {}
+            self.pending_permissions.resolve(request_key, decision)
+
+        # Return decision as HTTP response
+        if decision:
+            response = _build_json_response(decision)
+        else:
+            response = _HTTP_200  # empty = no decision, Claude Code falls back to terminal
+        writer.write(response)
+        await writer.drain()

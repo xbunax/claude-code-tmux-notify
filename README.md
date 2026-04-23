@@ -69,6 +69,10 @@ agent-tmux-notify [选项]
   --hook-port INT             Hook 服务器端口（默认 19836）
   --no-hook-server            禁用 Hook HTTP 服务器
   --setup-hooks               配置 Claude Code hooks 后退出
+  --enable-buffer-detection   启用 tmux buffer 轮询（覆盖配置文件）
+  --disable-buffer-detection  禁用 tmux buffer 轮询（覆盖配置文件）
+  --dump-hook-payloads        将 hook 原始 payload 写入 JSONL（调试）
+  --dump-path PATH            hook payload dump 文件路径（默认 /tmp/claude-code-hook-payloads.jsonl）
   -v, --verbose               开启 debug 日志
 ```
 
@@ -137,13 +141,14 @@ host           = "127.0.0.1"
 port           = 19836
 ttl            = 30.0         # hook 事件过期时间，秒
 dump_payloads  = false        # 是否将 hook 原始 payload 写入文件（调试用）
+dump_path      = "/tmp/claude-code-hook-payloads.jsonl"
 ```
 
 ### Buffer 检测
 
 ```toml
 [buffer_detection]
-enabled = true    # 设为 false 可完全禁用 buffer 轮询，仅使用 hook 驱动模式
+enabled = false   # 默认关闭，仅使用 hook 驱动；设为 true 可启用 buffer 轮询
 ```
 
 ### 触发词配置
@@ -176,7 +181,7 @@ patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 ## 架构
 
 ```
-claude_code_tmux_notify/
+agent_tmux_notify/
   cli.py               CLI 入口，解析参数，启动 Monitor
   monitor.py           主循环：发现、轮询、hook 合并、弹窗调度
   detector.py          buffer 解析：TriggerMatcher、TriggerEvent、HookData、Plan 文件读取

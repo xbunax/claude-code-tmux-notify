@@ -1,7 +1,7 @@
 """Configure Claude Code hooks in ~/.claude/settings.json.
 
 Usage:
-    python -m claude_code_tmux_notify.setup_hooks [--port PORT]
+    python -m agent_tmux_notify.setup_hooks [--port PORT]
 """
 
 from __future__ import annotations

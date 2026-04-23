@@ -10,6 +10,7 @@ import re
 
 from . import tmux
 from .config import TriggersConfig, TriggerScenario, default_triggers
+from .hook_server import HookEvent
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +145,160 @@ async def find_claude_panes() -> list[ClaudePane]:
                 result.append(ClaudePane(pane=pane, claude_pid=pid))
                 break
     return result
+
+
+async def extract_options_from_buffer(
+    pane_id: str, triggers: CompiledTriggers, buffer_lines: int = 100
+) -> tuple[list[str], int]:
+    """从 tmux buffer 解析选项列表和当前选中索引。
+
+    Returns (options, selected_index)。解析失败返回 ([], 0)。
+    """
+    try:
+        text = await tmux.capture_pane(pane_id, lines=buffer_lines)
+    except RuntimeError:
+        return [], 0
+
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return [], 0
+
+    tail = lines[-60:]
+
+    # 从底部向上找到 prompt 行
+    proceed_idx = None
+    for i in range(len(tail) - 1, -1, -1):
+        stripped = tail[i].strip()
+        if triggers.plan.matches(stripped) or triggers.permission.matches(stripped):
+            proceed_idx = i
+            break
+
+    if proceed_idx is None:
+        return [], 0
+
+    # 扫描 prompt 下方的选项
+    options: list[str] = []
+    selected_index = 0
+    scan_end = min(proceed_idx + 16, len(tail))
+    for k in range(proceed_idx + 1, scan_end):
+        s = tail[k].strip()
+        if not s:
+            continue
+        m = _OPTION_RE.match(tail[k])
+        if m:
+            if m.group(1):  # ❯ present
+                selected_index = len(options)
+            options.append(m.group(3).strip())
+            continue
+        if _HELP_RE.match(s):
+            break
+
+    return options, selected_index
+
+
+def _read_plan_file(path: str) -> list[str]:
+    """Read plan file content, return lines or empty list on failure."""
+    expanded = os.path.expanduser(path)
+    try:
+        with open(expanded) as f:
+            return f.read().splitlines()
+    except OSError:
+        log.debug("Failed to read plan file: %s", expanded)
+        return []
+
+
+async def build_trigger_event_from_hook(
+    pane_id: str | None,
+    hook_event: HookEvent,
+    raw_payload: dict,
+    pretooluse_context: list[HookEvent] | None = None,
+    buffer_options: list[str] | None = None,
+    buffer_selected_index: int = 0,
+) -> TriggerEvent:
+    """Build a TriggerEvent from hook data, with optional PreToolUse context and buffer options."""
+    cwd = None
+    project_name = "unknown"
+    session_name = ""
+    if pane_id:
+        cwd = await tmux.get_pane_cwd(pane_id)
+        project_name = os.path.basename(cwd) if cwd else "unknown"
+        session_name = await tmux.get_session_name(pane_id)
+
+    tool_name = hook_event.tool_name or ""
+    tool_input = hook_event.tool_input or {}
+
+    # PreToolUse 上下文补充：优先用 PermissionRequest 自身的 tool_input，
+    # 仅在缺失时从最近的 PreToolUse 补充
+    if not tool_input and pretooluse_context:
+        latest = pretooluse_context[-1]
+        if latest.tool_input:
+            tool_input = latest.tool_input
+        if not tool_name and latest.tool_name:
+            tool_name = latest.tool_name
+
+    # Build question from payload
+    question = raw_payload.get("message", "")
+    if not question:
+        if tool_name:
+            question = f"Allow {tool_name}?"
+        else:
+            question = "Permission requested"
+
+    # 选项优先级：buffer > hook payload fallback
+    if buffer_options:
+        options = list(buffer_options)
+        selected_index = buffer_selected_index
+    else:
+        # 从 permission_suggestions 构建选项（兜底）
+        options = ["Allow"]
+        suggestions = raw_payload.get("permission_suggestions", [])
+        for sug in suggestions:
+            if isinstance(sug, dict):
+                rules = sug.get("rules", [])
+                for rule in rules:
+                    if isinstance(rule, dict):
+                        content = rule.get("ruleContent", "")
+                        if content:
+                            options.append(f"Always Allow: {content}")
+        options.append("Deny")
+        selected_index = 0
+
+    # Determine scenario + plan content
+    content: list[str] = []
+    plan_file_path: str | None = None
+
+    if tool_name == "ExitPlanMode":
+        scenario = "plan"
+        # 从 tool_input 提取 planFilePath 并读取内容
+        pfp = tool_input.get("planFilePath", "")
+        if pfp:
+            plan_file_path = os.path.expanduser(pfp)
+            content = _read_plan_file(pfp)
+    else:
+        scenario = "permission"
+
+    hd = HookData(
+        session_id=hook_event.session_id,
+        hook_event_name=hook_event.hook_event_name,
+        tool_name=tool_name or None,
+        tool_input=tool_input or None,
+        cwd=hook_event.cwd,
+    )
+
+    return TriggerEvent(
+        project_name=project_name,
+        session_name=session_name,
+        pane_id=pane_id or "",
+        scenario=scenario,
+        content=content,
+        question=question,
+        options=options,
+        selected_index=selected_index,
+        hook_data=hd,
+        plan_file_path=plan_file_path,
+    )
 
 
 async def build_trigger_event(

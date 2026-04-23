@@ -377,7 +377,7 @@ class Monitor:
             scenario="idle",
             content=[],
             question=message,
-            options=["聚焦到此 pane"],
+            options=[],
             selected_index=0,
         )
 

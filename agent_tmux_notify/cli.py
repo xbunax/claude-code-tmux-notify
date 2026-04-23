@@ -78,7 +78,7 @@ def main() -> None:
 
     # --setup-hooks: configure and exit
     if args.setup_hooks:
-        from claude_code_tmux_notify.setup_hooks import setup_hooks
+        from agent_tmux_notify.setup_hooks import setup_hooks
         port = args.hook_port or 19836
         setup_hooks(port=port)
         sys.exit(0)
@@ -89,7 +89,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    from claude_code_tmux_notify.monitor import Monitor
+    from agent_tmux_notify.monitor import Monitor
 
     monitor = Monitor(
         poll_interval=args.poll_interval,
@@ -115,7 +115,7 @@ def main() -> None:
         monitor.config.hook_server.dump_path = args.dump_path
     # Apply dumper after CLI overrides (Monitor.__init__ creates it too early)
     if monitor.config.hook_server.dump_payloads and monitor.hook_server is not None:
-        from claude_code_tmux_notify.hook_server import PayloadDumper
+        from agent_tmux_notify.hook_server import PayloadDumper
         monitor.hook_server._dumper = PayloadDumper(monitor.config.hook_server.dump_path)
 
     try:

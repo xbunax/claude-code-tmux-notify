@@ -1,7 +1,7 @@
 """Curses-based selector UI that runs inside a tmux display-popup.
 
 Usage (launched by monitor.py via tmux display-popup):
-    python -m claude_code_tmux_notify.popup --config /tmp/agent-tmux-notify-cfg-XXXX.json
+    python -m agent_tmux_notify.popup --config /tmp/agent-tmux-notify-cfg-XXXX.json
 
 Config JSON keys (TriggerEvent format):
     project_name, session_name, pane_id, scenario, content, question,
