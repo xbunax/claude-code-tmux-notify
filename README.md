@@ -8,7 +8,6 @@ Monitor Claude Code CLI instances inside tmux, automatically popping up an inter
 
 ### Permission Request
 
-When Claude Code requests execution permission, the popup displays the tool call content and waits for confirmation. In hook mode, decisions are sent back directly.
 
 <p align="center">
   <img src="showcase/permission.gif" alt="Permission request demo" width="800">
@@ -16,7 +15,6 @@ When Claude Code requests execution permission, the popup displays the tool call
 
 ### Plan Approval
 
-When Claude Code submits a Plan for approval, the popup shows the Plan summary and supports editing with `Ctrl-G`.
 
 <p align="center">
   <img src="showcase/plan.gif" alt="Plan approval demo" width="800">

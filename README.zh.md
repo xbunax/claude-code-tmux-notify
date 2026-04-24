@@ -8,15 +8,11 @@
 
 ### 权限请求
 
-Claude Code 申请执行权限时，弹窗展示工具调用内容并等待确认。Hook 模式下决策直接回传至 Claude Code。
-
 <p align="center">
   <img src="showcase/permission.gif" alt="权限请求演示" width="800">
 </p>
 
 ### Plan 审批
-
-Claude Code 提交 Plan 等待审批时，弹窗展示 Plan 摘要，支持通过 `Ctrl-G` 编辑 Plan 文件后重新提交。
 
 <p align="center">
   <img src="showcase/plan.gif" alt="Plan 审批演示" width="800">
