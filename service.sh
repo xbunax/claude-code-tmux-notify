@@ -1,12 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.july.agent-tmux-notify"
+LABEL="com.agent-tmux-notify"
 PLIST_NAME="${LABEL}.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLIST_SRC="${SCRIPT_DIR}/${PLIST_NAME}"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}"
 LOG_DIR="$HOME/Library/Logs/agent-tmux-notify"
+CLI_BIN="$HOME/.local/bin/agent-tmux-notify"
 
 usage() {
     echo "Usage: $0 {install|uninstall|start|stop|restart|status|logs}"
@@ -36,7 +36,39 @@ cmd_install() {
     echo "Installing CLI tool via uv..."
     uv tool install --editable "$SCRIPT_DIR" --force
     mkdir -p "$LOG_DIR"
-    cp "$PLIST_SRC" "$PLIST_DST"
+    cat > "$PLIST_DST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${CLI_BIN}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>${LOG_DIR}/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${LOG_DIR}/stderr.log</string>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
+EOF
     echo "Plist installed to $PLIST_DST"
     install_config
     echo "Run '$0 start' to start the service."

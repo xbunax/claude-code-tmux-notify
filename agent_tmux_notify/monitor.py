@@ -211,8 +211,7 @@ class Monitor:
                 return
             del self._input_first_seen[pane_id]
             if pane_id not in self.active_popups:
-                active = await tmux.get_active_pane_id()
-                if active == pane_id:
+                if await self._is_claude_pane_focused(pane_id):
                     log.debug("Skipping popup for %s — pane is focused", pane_id)
                     return
                 self._notified_prompts[pane_id] = prompt_key
@@ -233,9 +232,17 @@ class Monitor:
             and prev is not None
             and prev.state == PaneState.WORKING
         ):
-            active = await tmux.get_active_pane_id()
-            if active != pane_id:
+            if not await self._is_claude_pane_focused(pane_id):
                 asyncio.create_task(self._notify_completed(pane_id))
+
+    async def _is_claude_pane_focused(self, pane_id: str | None = None) -> bool:
+        """Check whether focused pane belongs to Claude panes; optional exact match."""
+        active = await tmux.get_active_pane_id()
+        if not active:
+            return False
+        if pane_id is not None:
+            return active == pane_id
+        return active in self.panes
 
     # --- Hook-driven callbacks ---
 
@@ -258,13 +265,16 @@ class Monitor:
         """Called by hook server when a PermissionRequest arrives."""
         pane_id = pp.pane_id
 
+        if not pane_id:
+            await self._discover()
+            pane_id = self.correlator.correlate(pp.event)
+            pp.pane_id = pane_id
+
         # Skip if pane is focused
-        if pane_id:
-            active = await tmux.get_active_pane_id()
-            if active == pane_id:
-                log.debug("Skipping hook popup for %s — pane is focused", pane_id)
-                self.pending_permissions.resolve(request_key, {})
-                return
+        if await self._is_claude_pane_focused(pane_id):
+            log.debug("Skipping hook popup for %s — pane is focused", pane_id)
+            self.pending_permissions.resolve(request_key, {})
+            return
 
         # Skip if popup already active for this pane
         if pane_id and pane_id in self.active_popups:
@@ -305,6 +315,11 @@ class Monitor:
 
         # Map result to hook decision (with cross-validation)
         decision = self._map_result_to_decision(result, event, pp.raw_payload)
+        log.info(
+            "Permission decision for session %s: %s",
+            pp.event.session_id[:8],
+            decision if decision else {},
+        )
         self.pending_permissions.resolve(request_key, decision)
 
     async def _on_notification(
@@ -330,8 +345,7 @@ class Monitor:
                 log.debug("Notification received but no pane to show it on")
                 return
 
-        active = await tmux.get_active_pane_id()
-        if active == pane_id:
+        if await self._is_claude_pane_focused(pane_id):
             return
 
         message = raw_payload.get("message", "Claude Code notification")
@@ -340,6 +354,7 @@ class Monitor:
             safe_msg = message.replace('"', '\\"')
             cmd = ["bash", "-c", f'echo "{safe_msg}"; sleep 3']
             pcfg = self.config.popup
+            active = await tmux.get_active_pane_id()
             target = active if active else pane_id
             await tmux.display_popup(
                 target, cmd, width="50", height="3",
@@ -358,8 +373,7 @@ class Monitor:
         if not pane_id:
             return
 
-        active = await tmux.get_active_pane_id()
-        if active == pane_id:
+        if await self._is_claude_pane_focused(pane_id):
             return  # Already focused, no notification needed
 
         if pane_id in self.active_popups:
@@ -696,6 +710,8 @@ class Monitor:
     async def _notify_completed(self, pane_id: str) -> None:
         log.info("Task completed in %s", pane_id)
         try:
+            if await self._is_claude_pane_focused(pane_id):
+                return
             cmd = ["bash", "-c", 'echo "✓ Claude Code task completed"; sleep 2']
             pcfg = self.config.popup
             active = await tmux.get_active_pane_id()

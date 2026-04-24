@@ -63,14 +63,25 @@ async def send_keys_literal(pane_id: str, text: str) -> None:
 
 
 async def get_active_pane_id() -> str | None:
-    """Return the pane_id of the currently focused pane (session:window.pane)."""
+    """Return focused pane_id in daemon-safe way using pane/window/session flags."""
     try:
-        _, out, _ = await _run(
-            "tmux", "display-message", "-p",
-            "#{session_name}:#{window_index}.#{pane_index}",
+        fmt = (
+            "#{session_name}:#{window_index}.#{pane_index}\t"
+            "#{pane_active}\t#{window_active}\t#{session_attached}"
         )
-        result = out.strip()
-        return result if result else None
+        _, out, _ = await _run("tmux", "list-panes", "-a", "-F", fmt)
+        fallback: str | None = None
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) != 4:
+                continue
+            pane_id, pane_active, window_active, session_attached = parts
+            if pane_active == "1" and window_active == "1":
+                if session_attached == "1":
+                    return pane_id
+                if fallback is None:
+                    fallback = pane_id
+        return fallback
     except RuntimeError:
         return None
 
