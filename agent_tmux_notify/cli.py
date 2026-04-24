@@ -11,22 +11,10 @@ def main() -> None:
         description="Monitor Claude Code CLI instances in tmux panes"
     )
     parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=1.5,
-        help="Seconds between state polls (default: 1.5)",
-    )
-    parser.add_argument(
         "--discovery-interval",
         type=float,
         default=30.0,
         help="Seconds between pane discovery scans (default: 30)",
-    )
-    parser.add_argument(
-        "--debounce",
-        type=float,
-        default=3.0,
-        help="Seconds to confirm NEEDS_INPUT before popup (default: 3)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug logging"
@@ -52,16 +40,6 @@ def main() -> None:
         "--setup-hooks",
         action="store_true",
         help="Configure Claude Code hooks in ~/.claude/settings.json and exit",
-    )
-    parser.add_argument(
-        "--enable-buffer-detection",
-        action="store_true",
-        help="Enable tmux buffer polling (overrides config)",
-    )
-    parser.add_argument(
-        "--disable-buffer-detection",
-        action="store_true",
-        help="Disable tmux buffer polling (overrides config)",
     )
     parser.add_argument(
         "--dump-hook-payloads",
@@ -92,9 +70,7 @@ def main() -> None:
     from agent_tmux_notify.monitor import Monitor
 
     monitor = Monitor(
-        poll_interval=args.poll_interval,
         discovery_interval=args.discovery_interval,
-        debounce_seconds=args.debounce,
         config_path=args.config,
     )
 
@@ -105,10 +81,6 @@ def main() -> None:
     if args.hook_port is not None and monitor.hook_server is not None:
         monitor.config.hook_server.port = args.hook_port
         monitor.hook_server.port = args.hook_port
-    if args.enable_buffer_detection:
-        monitor.config.buffer_detection.enabled = True
-    if args.disable_buffer_detection:
-        monitor.config.buffer_detection.enabled = False
     if args.dump_hook_payloads:
         monitor.config.hook_server.dump_payloads = True
     if args.dump_path:

@@ -23,14 +23,14 @@ Monitor Claude Code CLI instances inside tmux, automatically popping up an inter
 ## Features
 
 - **Auto Discovery**: Scans all tmux panes on startup, binding to running Claude Code processes (PID)
-- **Dual Operation Modes**: Supports buffer polling mode and hook-driven mode, usable individually or combined. Buffer detection can be fully disabled in hook-driven mode
+- **Hook-Driven Core**: Receives `PreToolUse`, `PermissionRequest`, `Notification` and other events pushed by Claude Code hooks, directly triggering popups and sending user decisions back to Claude Code
+- **Buffer-Assisted Parsing**: Reads recent tmux buffer lines only as auxiliary context to recover option lists and current selection
 - **Popup Interaction**: When input is needed, opens a curses TUI next to the current pane, displaying context, questions, and options
 - **Plan File Reading**: In plan approval scenarios, automatically reads plan files from `~/.claude/plans/` and renders the full Plan in the popup
-- **Hook-Driven**: Receives `PreToolUse`, `PermissionRequest`, `Notification` and other events pushed by Claude Code hooks, directly triggering popups and sending user decisions back to Claude Code
 - **Idle Notification**: Pops up a notification when Claude Code is idle waiting for input, with one-key focus to the corresponding pane
 - **Rich Markdown Rendering**: Popup context is rendered with the `rich` library, supporting syntax highlighting
-- **Configurable Triggers**: Trigger conditions (regex + keywords) for each scenario are customizable in the config file
-- **Focus Jump**: In the popup, you can jump directly to the corresponding pane (supported in both buffer and hook modes)
+- **Configurable Parse Rules**: Parse rules (regex + keywords) for permission/plan prompts are customizable in the config file
+- **Focus Jump**: In the popup, you can jump directly to the corresponding pane
 - **macOS Service**: Provides launchd service configuration, supporting startup on boot and background operation
 
 ## Installation
@@ -72,23 +72,17 @@ agent-tmux-notify --setup-hooks
 
 This registers HTTP hooks for `PreToolUse`, `PermissionRequest`, `Notification`, and `Stop` events, pointing to `127.0.0.1:19836`. Existing hook configurations are not overwritten.
 
-The tool works without hook configuration (buffer detection only), but popup content will have less structured information.
-
 ## Usage
 
 ```
 agent-tmux-notify [options]
 
 Options:
-  --poll-interval FLOAT       Status polling interval in seconds (default 1.5)
   --discovery-interval FLOAT  Pane discovery scan interval in seconds (default 30)
-  --debounce FLOAT            Debounce time before confirming NEEDS_INPUT, in seconds (default 3)
   --config PATH               Config file path (default ~/.config/agent-tmux-notify/config.toml)
   --hook-port INT             Hook server port (default 19836)
   --no-hook-server            Disable the Hook HTTP server
   --setup-hooks               Configure Claude Code hooks and exit
-  --enable-buffer-detection   Enable tmux buffer polling (overrides config file)
-  --disable-buffer-detection  Disable tmux buffer polling (overrides config file)
   --dump-hook-payloads        Write raw hook payloads to JSONL (debugging)
   --dump-path PATH            Hook payload dump file path (default /tmp/claude-code-hook-payloads.jsonl)
   -v, --verbose               Enable debug logging
@@ -129,24 +123,6 @@ Two special options are always appended at the end of the option list:
 - **[Focus on this pane]**: Switch tmux focus to the corresponding Claude Code pane
 - **[Custom input...]**: Enter text input mode to send arbitrary content (not shown in idle scenario)
 
-## Showcase
-
-### Permission Request
-
-When Claude Code requests execution permission, the popup displays the tool call content and waits for confirmation. In hook mode, decisions are sent back directly.
-
-<p align="center">
-  <img src="showcase/permission.gif" alt="Permission request demo" width="800">
-</p>
-
-### Plan Approval
-
-When Claude Code submits a Plan for approval, the popup shows the Plan summary and supports editing with `Ctrl-G`.
-
-<p align="center">
-  <img src="showcase/plan.gif" alt="Plan approval demo" width="800">
-</p>
-
 ## Configuration
 
 The config file is located at `~/.config/agent-tmux-notify/config.toml`. All fields are optional; built-in defaults are used when omitted. See `config.toml.default` for the default template.
@@ -180,27 +156,17 @@ dump_payloads  = false        # Whether to dump raw hook payloads to file (debug
 dump_path      = "/tmp/claude-code-hook-payloads.jsonl"
 ```
 
-### Buffer Detection
+### Parse Rule Configuration
+
+Each scenario supports `patterns` (regex) and `keywords` (substring match); either match will mark the prompt line for option parsing.
 
 ```toml
-[buffer_detection]
-enabled = false   # Disabled by default, hook-driven only; set to true to enable buffer polling
-```
-
-### Trigger Configuration
-
-Each scenario supports `patterns` (regex) and `keywords` (substring match); either match will trigger.
-
-```toml
-[triggers.permission]
+[parse_rules.permission]
 patterns = ['Do you want to .*\?', 'Would you like to .*\?']
 keywords = ["Do you want to", "Would you like to"]
 
-[triggers.plan]
+[parse_rules.plan]
 keywords = ["approve this plan", "approve the plan"]
-
-[triggers.completed]
-patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 ```
 
 > Use single quotes (literal strings) for regex in TOML to avoid backslash escaping issues.
@@ -212,20 +178,18 @@ patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 | `permission` | Claude Code requests execution permission | Shows tool call content, waits for confirmation (decisions sent back directly in hook mode) |
 | `plan` | Claude Code submits a Plan for approval | Shows Plan summary, supports Ctrl-G to edit and re-submit for approval |
 | `idle` | Claude Code idle, waiting for user input | Notification popup, one-key focus to the corresponding pane |
-| `completed` | Task execution completed | Brief completion notification (auto-closes after 2 seconds) |
 
 ## Architecture
 
 ```
 agent_tmux_notify/
   cli.py               CLI entry point, parses arguments, starts Monitor
-  monitor.py           Main loop: discovery, polling, hook merge, popup scheduling
-  detector.py          Buffer parsing: TriggerMatcher, TriggerEvent, HookData, Plan file reading
+  monitor.py           Main loop: discovery, hook handling, popup scheduling
+  detector.py          Buffer-assisted option parsing, TriggerEvent/HookData, plan file reading
   hook_server.py       HTTP hook server: HookServer, HookStore, PaneCorrelator
   setup_hooks.py       CLI tool: configures hooks in ~/.claude/settings.json
-  config.py            TOML config loading: PopupConfig, HookServerConfig, TriggersConfig
+  config.py            TOML config loading: PopupConfig, HookServerConfig, ParseRulesConfig
   popup.py             curses TUI popup, rich markdown rendering
-  responder.py         Converts popup selections to tmux send-keys back to Claude Code
   tmux.py              tmux CLI async wrapper
 main.py                Legacy entry point (compatibility), same as cli.py
 config.toml.default    Default configuration template
@@ -246,16 +210,13 @@ Claude Code ──[hook HTTP POST]──► HookServer (localhost:19836)
     │                                  ▼
     │                        PaneCorrelator (CWD matches hook → pane)
     │                                  │
-    ├──[tmux buffer]──► Monitor ──► detector.parse_buffer()
-    │                                  │
-    │                                  ▼
-    │                        TriggerEvent → popup.py (rich markdown)
-    │                                  │
-    │                          ┌───────┴───────┐
-    │                          ▼               ▼
-    │                    Buffer mode:      Hook mode:
-    │                    responder.py      Decision sent back to HookServer
-    │                    (tmux send-keys)  (JSON response)
+    └──[tmux buffer (aux)]──► detector.extract_options_from_buffer()
+                                       │
+                                       ▼
+                            TriggerEvent → popup.py (rich markdown)
+                                       │
+                                       ▼
+                            Decision sent back to HookServer (JSON response)
 ```
 
 ### TriggerEvent JSON Structure

@@ -1,11 +1,8 @@
 # agent-tmux-notify 配置文件
 # 路径: ~/.config/agent-tmux-notify/config.toml
 
-# 缓冲区行数
+# 从 tmux buffer 提取上下文/选项时读取的行数
 buffer_lines = 25
-
-[buffer_detection]
-enabled = false   # true = 启用 tmux buffer 轮询检测
 
 [popup]
 width = "25%"
@@ -21,14 +18,10 @@ ttl = 30.0
 dump_payloads = false
 dump_path = "/tmp/claude-code-hook-payloads.jsonl"
 
-[triggers.permission]
+[parse_rules.permission]
 patterns = ['Do you want to .*\?', 'Would you like to .*\?']
 keywords = ["Do you want to", "Would you like to"]
 
-[triggers.plan]
+[parse_rules.plan]
 patterns = []
 keywords = ["approve this plan", "approve the plan"]
-
-[triggers.completed]
-patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
-keywords = []

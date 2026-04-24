@@ -13,11 +13,6 @@ DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/agent-tmux-notify/config.tom
 
 
 @dataclasses.dataclass
-class BufferDetectionConfig:
-    enabled: bool = False  # 默认关闭，使用 hook 驱动
-
-
-@dataclasses.dataclass
 class HookServerConfig:
     enabled: bool = True
     host: str = "127.0.0.1"
@@ -36,32 +31,34 @@ class PopupConfig:
 
 
 @dataclasses.dataclass
-class TriggerScenario:
+class ParseRuleConfig:
     patterns: list[str] = dataclasses.field(default_factory=list)
     keywords: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
-class TriggersConfig:
-    permission: TriggerScenario = dataclasses.field(default_factory=TriggerScenario)
-    plan: TriggerScenario = dataclasses.field(default_factory=TriggerScenario)
-    completed: TriggerScenario = dataclasses.field(default_factory=TriggerScenario)
+class ParseRulesConfig:
+    permission: ParseRuleConfig = dataclasses.field(default_factory=ParseRuleConfig)
+    plan: ParseRuleConfig = dataclasses.field(default_factory=ParseRuleConfig)
 
 
-def default_triggers() -> TriggersConfig:
-    return TriggersConfig(
-        permission=TriggerScenario(
+def default_parse_rules() -> ParseRulesConfig:
+    return ParseRulesConfig(
+        permission=ParseRuleConfig(
             patterns=[r"Do you want to .*\?", r"Would you like to .*\?"],
             keywords=["Do you want to", "Would you like to"],
         ),
-        plan=TriggerScenario(
+        plan=ParseRuleConfig(
             patterns=[],
             keywords=["approve this plan", "approve the plan"],
         ),
-        completed=TriggerScenario(
-            patterns=[r"(Brewed|Crunched|Swooped|Drizzled) for\s+"],
-            keywords=[],
-        ),
+    )
+
+
+def _parse_rule_config(data: dict) -> ParseRuleConfig:
+    return ParseRuleConfig(
+        patterns=[str(p) for p in data.get("patterns", [])],
+        keywords=[str(k) for k in data.get("keywords", [])],
     )
 
 
@@ -69,16 +66,8 @@ def default_triggers() -> TriggersConfig:
 class Config:
     popup: PopupConfig = dataclasses.field(default_factory=PopupConfig)
     hook_server: HookServerConfig = dataclasses.field(default_factory=HookServerConfig)
-    buffer_detection: BufferDetectionConfig = dataclasses.field(default_factory=BufferDetectionConfig)
-    triggers: TriggersConfig = dataclasses.field(default_factory=default_triggers)
+    parse_rules: ParseRulesConfig = dataclasses.field(default_factory=default_parse_rules)
     buffer_lines: int = 100
-
-
-def _parse_trigger_scenario(data: dict) -> TriggerScenario:
-    return TriggerScenario(
-        patterns=[str(p) for p in data.get("patterns", [])],
-        keywords=[str(k) for k in data.get("keywords", [])],
-    )
 
 
 def load_config(path: str | None = None) -> Config:
@@ -103,18 +92,18 @@ def load_config(path: str | None = None) -> Config:
             if field in popup:
                 setattr(cfg.popup, field, str(popup[field]))
 
-    triggers_data = data.get("triggers", {})
-    defaults = default_triggers()
-    cfg.triggers = TriggersConfig(
-        permission=_parse_trigger_scenario(triggers_data["permission"])
-        if "permission" in triggers_data
+    # New name: parse_rules. Legacy name: triggers.
+    rules_data = data.get("parse_rules")
+    if rules_data is None:
+        rules_data = data.get("triggers", {})
+    defaults = default_parse_rules()
+    cfg.parse_rules = ParseRulesConfig(
+        permission=_parse_rule_config(rules_data["permission"])
+        if isinstance(rules_data, dict) and "permission" in rules_data
         else defaults.permission,
-        plan=_parse_trigger_scenario(triggers_data["plan"])
-        if "plan" in triggers_data
+        plan=_parse_rule_config(rules_data["plan"])
+        if isinstance(rules_data, dict) and "plan" in rules_data
         else defaults.plan,
-        completed=_parse_trigger_scenario(triggers_data["completed"])
-        if "completed" in triggers_data
-        else defaults.completed,
     )
 
     if "buffer_lines" in data:
@@ -134,10 +123,5 @@ def load_config(path: str | None = None) -> Config:
             cfg.hook_server.dump_payloads = bool(hook["dump_payloads"])
         if "dump_path" in hook:
             cfg.hook_server.dump_path = str(hook["dump_path"])
-
-    buf_det = data.get("buffer_detection", {})
-    if buf_det:
-        if "enabled" in buf_det:
-            cfg.buffer_detection.enabled = bool(buf_det["enabled"])
 
     return cfg

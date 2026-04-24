@@ -21,14 +21,14 @@
 ## 功能
 
 - **自动发现**：启动时扫描所有 tmux pane，绑定正在运行的 Claude Code 进程（PID）
-- **双运行模式**：支持 buffer 轮询模式和 hook 驱动模式，可单独或组合使用。hook 驱动模式下可完全禁用 buffer 检测
+- **Hook 驱动主流程**：接收 Claude Code hooks 推送的 `PreToolUse`、`PermissionRequest`、`Notification` 等事件，直接触发弹窗并将用户决策回传给 Claude Code
+- **Buffer 辅助解析**：仅在需要时读取 tmux buffer 尾部内容，用于补全选项列表与当前选中项
 - **弹窗交互**：检测到需要输入时，在当前 pane 旁弹出 curses TUI，展示上下文、问题和选项
 - **Plan 文件读取**：Plan 审批场景自动从 `~/.claude/plans/` 读取 plan 文件内容，在弹窗中渲染完整 Plan
-- **Hook 驱动**：接收 Claude Code hooks 推送的 `PreToolUse`、`PermissionRequest`、`Notification` 等事件，直接触发弹窗并将用户决策回传给 Claude Code
 - **Idle 通知**：Claude Code 空闲等待输入时弹出通知，可一键聚焦到对应 pane
 - **Rich Markdown 渲染**：弹窗上下文使用 rich 库渲染 markdown，支持语法高亮
-- **可配置触发词**：每个场景的触发条件（正则 + 关键词）均可在配置文件中自定义
-- **聚焦跳转**：弹窗中可选择直接跳转到对应 pane（buffer 模式和 hook 模式均支持）
+- **可配置解析规则**：权限与 Plan 场景解析规则（正则 + 关键词）可在配置文件中自定义
+- **聚焦跳转**：弹窗中可选择直接跳转到对应 pane
 - **macOS 服务**：提供 launchd 服务配置，支持开机自启和后台运行
 
 ## 安装
@@ -70,23 +70,17 @@ agent-tmux-notify --setup-hooks
 
 这会为 `PreToolUse`、`PermissionRequest`、`Notification`、`Stop` 四个事件注册 HTTP hook，指向本地 `127.0.0.1:19836`。已有的 hooks 配置不会被覆盖。
 
-不配置 hooks 也能正常使用（仅依赖 buffer 检测），但弹窗内容会少一些结构化信息。
-
 ## 使用
 
 ```
 agent-tmux-notify [选项]
 
 选项：
-  --poll-interval FLOAT       状态轮询间隔，秒（默认 1.5）
   --discovery-interval FLOAT  pane 发现扫描间隔，秒（默认 30）
-  --debounce FLOAT            确认 NEEDS_INPUT 前的等待时间，秒（默认 3）
   --config PATH               配置文件路径（默认 ~/.config/agent-tmux-notify/config.toml）
   --hook-port INT             Hook 服务器端口（默认 19836）
   --no-hook-server            禁用 Hook HTTP 服务器
   --setup-hooks               配置 Claude Code hooks 后退出
-  --enable-buffer-detection   启用 tmux buffer 轮询（覆盖配置文件）
-  --disable-buffer-detection  禁用 tmux buffer 轮询（覆盖配置文件）
   --dump-hook-payloads        将 hook 原始 payload 写入 JSONL（调试）
   --dump-path PATH            hook payload dump 文件路径（默认 /tmp/claude-code-hook-payloads.jsonl）
   -v, --verbose               开启 debug 日志
@@ -127,24 +121,6 @@ agent-tmux-notify -v
 - **[聚焦到此 pane]**：切换 tmux 焦点到对应的 Claude Code pane
 - **[自定义输入...]**：进入文本输入模式，发送任意内容（idle 场景下不显示）
 
-## 效果展示
-
-### 权限请求
-
-Claude Code 申请执行权限时，弹窗展示工具调用内容并等待确认。Hook 模式下决策直接回传至 Claude Code。
-
-<p align="center">
-  <img src="showcase/permission.gif" alt="权限请求演示" width="800">
-</p>
-
-### Plan 审批
-
-Claude Code 提交 Plan 等待审批时，弹窗展示 Plan 摘要，支持通过 `Ctrl-G` 编辑 Plan 文件后重新提交。
-
-<p align="center">
-  <img src="showcase/plan.gif" alt="Plan 审批演示" width="800">
-</p>
-
 ## 配置
 
 配置文件位于 `~/.config/agent-tmux-notify/config.toml`，所有字段均可选，缺省时使用内置默认值。默认配置模板见 `config.toml.default`。
@@ -178,27 +154,17 @@ dump_payloads  = false        # 是否将 hook 原始 payload 写入文件（调
 dump_path      = "/tmp/claude-code-hook-payloads.jsonl"
 ```
 
-### Buffer 检测
+### 解析规则配置
+
+每个场景支持 `patterns`（正则）和 `keywords`（子串匹配）两种方式，任意一种命中即将该行标记为解析起点。
 
 ```toml
-[buffer_detection]
-enabled = false   # 默认关闭，仅使用 hook 驱动；设为 true 可启用 buffer 轮询
-```
-
-### 触发词配置
-
-每个场景支持 `patterns`（正则）和 `keywords`（子串匹配）两种方式，任意一种命中即触发。
-
-```toml
-[triggers.permission]
+[parse_rules.permission]
 patterns = ['Do you want to .*\?', 'Would you like to .*\?']
 keywords = ["Do you want to", "Would you like to"]
 
-[triggers.plan]
+[parse_rules.plan]
 keywords = ["approve this plan", "approve the plan"]
-
-[triggers.completed]
-patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 ```
 
 > TOML 中正则建议使用单引号（literal string），避免反斜杠转义问题。
@@ -210,20 +176,18 @@ patterns = ['(Brewed|Crunched|Swooped|Drizzled) for\s+']
 | `permission` | Claude Code 申请执行权限 | 展示工具调用内容，等待确认（hook 模式下决策直接回传） |
 | `plan` | Claude Code 提交 Plan 等待审批 | 展示 Plan 摘要，支持 Ctrl-G 编辑后重新审批 |
 | `idle` | Claude Code 空闲等待用户输入 | 通知弹窗，可一键聚焦到对应 pane |
-| `completed` | 任务执行完成 | 短暂显示完成通知（2 秒后自动关闭） |
 
 ## 架构
 
 ```
 agent_tmux_notify/
   cli.py               CLI 入口，解析参数，启动 Monitor
-  monitor.py           主循环：发现、轮询、hook 合并、弹窗调度
-  detector.py          buffer 解析：TriggerMatcher、TriggerEvent、HookData、Plan 文件读取
+  monitor.py           主循环：发现、hook 处理、弹窗调度
+  detector.py          buffer 辅助选项解析、TriggerEvent/HookData、Plan 文件读取
   hook_server.py       HTTP hook 服务器：HookServer、HookStore、PaneCorrelator
   setup_hooks.py       CLI 工具：配置 ~/.claude/settings.json 中的 hooks
-  config.py            TOML 配置加载：PopupConfig、HookServerConfig、TriggersConfig
+  config.py            TOML 配置加载：PopupConfig、HookServerConfig、ParseRulesConfig
   popup.py             curses TUI 弹窗，rich markdown 渲染
-  responder.py         将弹窗选择转换为 tmux send-keys 发回 Claude Code
   tmux.py              tmux CLI 异步封装
 main.py                旧入口（兼容），等同于 cli.py
 config.toml.default    默认配置模板
@@ -244,16 +208,13 @@ Claude Code ──[hook HTTP POST]──► HookServer (localhost:19836)
     │                                  ▼
     │                        PaneCorrelator (CWD 匹配 hook → pane)
     │                                  │
-    ├──[tmux buffer]──► Monitor ──► detector.parse_buffer()
-    │                                  │
-    │                                  ▼
-    │                        TriggerEvent → popup.py (rich markdown)
-    │                                  │
-    │                          ┌───────┴───────┐
-    │                          ▼               ▼
-    │                    Buffer 模式:      Hook 模式:
-    │                    responder.py      决策回传 HookServer
-    │                    (tmux send-keys)  (JSON response)
+    └──[tmux buffer (辅助)]──► detector.extract_options_from_buffer()
+                                       │
+                                       ▼
+                            TriggerEvent → popup.py (rich markdown)
+                                       │
+                                       ▼
+                            决策回传 HookServer (JSON response)
 ```
 
 ### TriggerEvent JSON 结构
