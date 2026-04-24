@@ -75,14 +75,14 @@ class Monitor:
                 dumper=dumper,
             )
 
-        self.panes: dict[str, ClaudePane] = {}  # pane_id -> ClaudePane
+        self.panes: dict[str, ClaudePane] = {}  # global_pane_id -> ClaudePane
         self.prev_states: dict[str, DetectedState] = {}
         self.active_popups: set[str] = set()
         # Serialize popup display per pane so each tool gets its own popup
         self._pane_locks: dict[str, asyncio.Lock] = {}
-        # Debounce: pane_id -> first time NEEDS_INPUT was seen
+        # Debounce: global_pane_id -> first time NEEDS_INPUT was seen
         self._input_first_seen: dict[str, float] = {}
-        # Track already-notified prompts: pane_id -> prompt_question
+        # Track already-notified prompts: global_pane_id -> prompt_question
         # Prevents re-showing popup after user dismisses with ESC
         self._notified_prompts: dict[str, str] = {}
 
@@ -168,16 +168,17 @@ class Monitor:
             log.error("tmux not available: %s", e)
             return
 
-        current_ids = {cp.pane.pane_id for cp in claude_panes}
+        current_ids = {cp.pane.global_pane_id for cp in claude_panes}
         for cp in claude_panes:
-            if cp.pane.pane_id not in self.panes:
-                log.info("Discovered Claude Code in %s (pid %d)", cp.pane.pane_id, cp.claude_pid)
-                self.panes[cp.pane.pane_id] = cp
+            gid = cp.pane.global_pane_id
+            if gid not in self.panes:
+                log.info("Discovered Claude Code in %s (pid %d)", gid, cp.claude_pid)
+                self.panes[gid] = cp
             # Register/update pane CWD for hook correlation
             try:
-                cwd = await tmux.get_pane_cwd(cp.pane.pane_id)
+                cwd = await tmux.get_pane_cwd(gid)
                 if cwd:
-                    self.correlator.register_pane(cp.pane.pane_id, cwd)
+                    self.correlator.register_pane(gid, cwd)
             except RuntimeError:
                 pass
         for pid in list(self.panes):

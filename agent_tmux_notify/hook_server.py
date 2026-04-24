@@ -108,22 +108,42 @@ class PaneCorrelator:
     """Maps Claude Code session_ids to tmux pane_ids via CWD matching."""
 
     def __init__(self) -> None:
-        self._cwd_to_pane: dict[str, str] = {}
+        self._cwd_to_panes: dict[str, set[str]] = {}
         self._pane_to_cwd: dict[str, str] = {}
         self._session_to_pane: dict[str, str] = {}
         self._pane_to_session: dict[str, str] = {}
 
     def register_pane(self, pane_id: str, cwd: str) -> None:
-        self._cwd_to_pane[cwd] = pane_id
+        old_cwd = self._pane_to_cwd.get(pane_id)
+        if old_cwd and old_cwd != cwd:
+            s = self._cwd_to_panes.get(old_cwd)
+            if s:
+                s.discard(pane_id)
+                if not s:
+                    del self._cwd_to_panes[old_cwd]
+        self._cwd_to_panes.setdefault(cwd, set()).add(pane_id)
         self._pane_to_cwd[pane_id] = cwd
 
     def unregister_pane(self, pane_id: str) -> None:
         cwd = self._pane_to_cwd.pop(pane_id, None)
         if cwd:
-            self._cwd_to_pane.pop(cwd, None)
+            s = self._cwd_to_panes.get(cwd)
+            if s:
+                s.discard(pane_id)
+                if not s:
+                    del self._cwd_to_panes[cwd]
         sid = self._pane_to_session.pop(pane_id, None)
         if sid:
             self._session_to_pane.pop(sid, None)
+
+    def _pick_unbound(self, panes: set[str]) -> str | None:
+        """From a set of candidate panes, pick the single unbound one."""
+        if len(panes) == 1:
+            return next(iter(panes))
+        unbound = [p for p in panes if p not in self._pane_to_session]
+        if len(unbound) == 1:
+            return unbound[0]
+        return None
 
     def correlate(self, event: HookEvent) -> str | None:
         """Try to match a hook event to a pane_id. Caches on success."""
@@ -133,15 +153,19 @@ class PaneCorrelator:
         if not event.cwd:
             return None
         # Exact CWD match
-        pane_id = self._cwd_to_pane.get(event.cwd)
-        if pane_id:
-            self._bind(event.session_id, pane_id)
-            return pane_id
+        panes = self._cwd_to_panes.get(event.cwd)
+        if panes:
+            pane_id = self._pick_unbound(panes)
+            if pane_id:
+                self._bind(event.session_id, pane_id)
+                return pane_id
         # Subdirectory fallback
-        for registered_cwd, pid in self._cwd_to_pane.items():
+        for registered_cwd, candidate_panes in self._cwd_to_panes.items():
             if event.cwd.startswith(registered_cwd + "/") or registered_cwd.startswith(event.cwd + "/"):
-                self._bind(event.session_id, pid)
-                return pid
+                pane_id = self._pick_unbound(candidate_panes)
+                if pane_id:
+                    self._bind(event.session_id, pane_id)
+                    return pane_id
         return None
 
     def get_session_id(self, pane_id: str) -> str | None:

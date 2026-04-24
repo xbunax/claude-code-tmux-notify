@@ -13,9 +13,26 @@ log = logging.getLogger(__name__)
 
 @dataclasses.dataclass(frozen=True)
 class PaneInfo:
-    pane_id: str  # "session:window.pane"
+    pane_id: str      # tmux 唯一 pane ID，如 "%3"
+    session_id: str   # tmux 唯一 session ID，如 "$0"
+    window_id: str    # tmux 唯一 window ID，如 "@1"
     pid: int
     tty: str
+
+    @property
+    def global_pane_id(self) -> str:
+        """全局唯一标识：session_id/window_id/pane_id，如 '$1/@1/%3'。"""
+        return f"{self.session_id}/{self.window_id}/{self.pane_id}"
+
+
+def _target(global_pane_id: str) -> str:
+    """从 global_pane_id 提取 tmux -t 可用的 pane_id（%N 部分）。
+
+    如果不含 '/'，原样返回（兼容裸 pane_id）。
+    """
+    if "/" in global_pane_id:
+        return global_pane_id.rsplit("/", 1)[1]
+    return global_pane_id
 
 
 async def _run(
@@ -35,48 +52,79 @@ async def _run(
 
 
 async def list_panes() -> list[PaneInfo]:
-    fmt = "#{session_name}:#{window_index}.#{pane_index}\t#{pane_pid}\t#{pane_tty}"
+    fmt = "#{pane_id}\t#{session_id}\t#{window_id}\t#{pane_pid}\t#{pane_tty}"
     _, out, _ = await _run("tmux", "list-panes", "-a", "-F", fmt)
     panes: list[PaneInfo] = []
     for line in out.strip().splitlines():
         parts = line.split("\t")
-        if len(parts) != 3:
+        if len(parts) != 5:
             continue
-        panes.append(PaneInfo(pane_id=parts[0], pid=int(parts[1]), tty=parts[2]))
+        panes.append(PaneInfo(
+            pane_id=parts[0], session_id=parts[1], window_id=parts[2],
+            pid=int(parts[3]), tty=parts[4],
+        ))
     return panes
 
 
 async def capture_pane(pane_id: str, lines: int = 100) -> str:
     _, out, _ = await _run(
-        "tmux", "capture-pane", "-t", pane_id, "-p", "-S", f"-{lines}"
+        "tmux", "capture-pane", "-t", _target(pane_id), "-p", "-S", f"-{lines}"
     )
     return out
 
 
 async def send_keys(pane_id: str, keys: list[str]) -> None:
+    t = _target(pane_id)
     for key in keys:
-        await _run("tmux", "send-keys", "-t", pane_id, key)
+        await _run("tmux", "send-keys", "-t", t, key)
 
 
 async def send_keys_literal(pane_id: str, text: str) -> None:
-    await _run("tmux", "send-keys", "-t", pane_id, "-l", text)
+    await _run("tmux", "send-keys", "-t", _target(pane_id), "-l", text)
 
 
 async def is_pane_focused(pane_id: str) -> bool:
-    """Check if a pane is the active pane in the active window."""
+    """检查 pane 是否是用户当前真正聚焦的 pane（跨 session 感知）。"""
+    active = await get_active_pane_id()
+    if not active:
+        return False
+    if "/" in pane_id:
+        return active == pane_id
+    return _target(active) == pane_id
+
+
+async def _get_active_client_tty() -> str | None:
+    """找到用户真正聚焦的 tmux client 的 tty。
+
+    优先使用 client_flags 中的 "focused" 标记（tmux 3.3+），
+    回退到 client_activity。
+    """
     try:
         _, out, _ = await _run(
-            "tmux", "display-message", "-t", pane_id, "-p",
-            "#{pane_active} #{window_active}",
+            "tmux", "list-clients", "-F",
+            "#{client_activity}\t#{client_tty}\t#{client_flags}",
         )
-        parts = out.strip().split()
-        return len(parts) == 2 and parts[0] == "1" and parts[1] == "1"
+        best_tty = None
+        best_activity = -1
+        for line in out.strip().splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            activity = int(parts[0])
+            tty = parts[1]
+            flags = parts[2] if len(parts) >= 3 else ""
+            if "focused" in flags:
+                return tty
+            if activity > best_activity:
+                best_activity = activity
+                best_tty = tty
+        return best_tty
     except RuntimeError:
-        return False
+        return None
 
 
 async def get_active_pane_id() -> str | None:
-    """Return the pane_id of the currently focused pane (session:window.pane).
+    """返回当前焦点 pane 的 global_pane_id（session_id/window_id/pane_id）。
 
     Uses ``list-clients`` to find the most recently active client, then
     ``display-message -c`` to get that client's actual focused pane.
@@ -84,31 +132,17 @@ async def get_active_pane_id() -> str | None:
     attached sessions correctly.
     """
     try:
-        # Find the most recently active client
-        _, out, _ = await _run(
-            "tmux", "list-clients", "-F",
-            "#{client_activity}\t#{client_tty}",
-        )
-        best_tty = None
-        best_activity = -1
-        for line in out.strip().splitlines():
-            parts = line.split("\t")
-            if len(parts) != 2:
-                continue
-            activity = int(parts[0])
-            if activity > best_activity:
-                best_activity = activity
-                best_tty = parts[1]
+        best_tty = await _get_active_client_tty()
         if not best_tty:
             return None
 
-        # Get the active pane from that client
+        # Get the active pane as global_pane_id
         _, out, _ = await _run(
             "tmux", "display-message", "-c", best_tty, "-p",
-            "#{session_name}:#{window_index}.#{pane_index}",
+            "#{session_id}/#{window_id}/#{pane_id}",
         )
-        pane_id = out.strip()
-        return pane_id if pane_id else None
+        gid = out.strip()
+        return gid if gid else None
     except RuntimeError:
         return None
 
@@ -129,7 +163,7 @@ async def display_popup(
     log_file = "/tmp/agent-tmux-notify-popup.log"
     shell_cmd = f"{shell_cmd} 2>>{shlex.quote(log_file)}"
 
-    args = ["tmux", "display-popup", "-t", pane_id, "-w", width, "-h", height]
+    args = ["tmux", "display-popup", "-t", _target(pane_id), "-w", width, "-h", height]
     if x is not None:
         args.extend(["-x", x])
     if y is not None:
@@ -145,7 +179,7 @@ async def display_popup(
 async def get_pane_cwd(pane_id: str) -> str:
     """Return the current working directory of a tmux pane."""
     _, out, _ = await _run(
-        "tmux", "display-message", "-t", pane_id, "-p", "#{pane_current_path}"
+        "tmux", "display-message", "-t", _target(pane_id), "-p", "#{pane_current_path}"
     )
     return out.strip()
 
@@ -153,20 +187,30 @@ async def get_pane_cwd(pane_id: str) -> str:
 async def get_session_name(pane_id: str) -> str:
     """Return the session name for a given pane."""
     _, out, _ = await _run(
-        "tmux", "display-message", "-t", pane_id, "-p", "#{session_name}"
+        "tmux", "display-message", "-t", _target(pane_id), "-p", "#{session_name}"
     )
     return out.strip()
 
 
 async def select_pane(pane_id: str) -> None:
-    """Switch tmux focus to the specified pane (handles cross-session/window)."""
-    # pane_id format: "session:window.pane"
-    # Switch session first so cross-session focus works
-    session = pane_id.split(":")[0]
-    window = pane_id.rsplit(".", 1)[0]
-    await _run("tmux", "switch-client", "-t", session)
-    await _run("tmux", "select-window", "-t", window)
-    await _run("tmux", "select-pane", "-t", pane_id)
+    """切换 tmux 焦点到指定 pane（支持跨 session/window）。
+
+    接受 global_pane_id（'$1/@1/%3'）或裸 pane_id（'%3'）。
+    通过 -c client_tty 指定要切换的 client，避免 daemon 下切错。
+    """
+    parts = pane_id.split("/")
+    if len(parts) == 3:
+        sid, wid, pid = parts
+    else:
+        pid = _target(pane_id)
+        sid = wid = ""
+
+    client_tty = await _get_active_client_tty()
+    if sid and client_tty:
+        await _run("tmux", "switch-client", "-c", client_tty, "-t", sid)
+    if wid:
+        await _run("tmux", "select-window", "-t", wid)
+    await _run("tmux", "select-pane", "-t", pid)
 
 
 async def get_descendant_pids(root_pid: int) -> list[tuple[int, str]]:
