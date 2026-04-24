@@ -23,8 +23,8 @@ from rich.markdown import Markdown
 from rich.theme import Theme
 
 
-FOCUS_OPTION = "聚焦到此 pane"
-CUSTOM_OPTION = "自定义输入..."
+FOCUS_OPTION = "Focus on this pane"
+CUSTOM_OPTION = "Custom input..."
 
 # --- Color pair IDs (UI only) ---
 C_SELECTED = 1
@@ -420,7 +420,7 @@ def _draw(
         if scenario == "plan":
             help_text = "↑↓ select · Enter confirm · Ctrl-G edit · Esc cancel"
         elif scenario == "idle":
-            help_text = "Enter 聚焦 · Esc 关闭"
+            help_text = "Enter focus · Esc close"
         if row < max_y:
             try:
                 stdscr.addnstr(

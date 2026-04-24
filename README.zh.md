@@ -139,8 +139,8 @@ brew services list
 | `Esc` | 取消，关闭弹窗 |
 
 选项列表末尾固定追加两个特殊选项：
-- **[聚焦到此 pane]**：切换 tmux 焦点到对应的 Claude Code pane
-- **[自定义输入...]**：进入文本输入模式，发送任意内容（idle 场景下不显示）
+- **[Focus on this pane]**：切换 tmux 焦点到对应的 Claude Code pane
+- **[Custom input...]**：进入文本输入模式，发送任意内容（idle 场景下不显示）
 
 ## 配置
 
