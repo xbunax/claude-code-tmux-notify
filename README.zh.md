@@ -38,6 +38,7 @@
 ```bash
 brew tap xbunax/tap
 brew install xbunax/tap/agent-tmux-notify
+brew services start xbunax/tap/agent-tmux-notify
 ```
 
 ### 源码安装
@@ -49,7 +50,7 @@ git clone <repo>
 cd agent-tmux-notify
 ```
 
-### 一键安装（推荐）
+### 一键安装（源码安装）
 
 使用 `service.sh` 脚本完成 CLI 工具安装、配置文件部署和 launchd 服务注册：
 
@@ -103,18 +104,29 @@ agent-tmux-notify -v
 
 ### 服务管理
 
-通过 `service.sh` 管理 macOS launchd 后台服务：
+Homebrew 安装推荐使用 `brew services` 管理 launchd 服务：
 
 ```bash
-./service.sh start      # 启动服务
-./service.sh stop       # 停止服务
-./service.sh restart    # 重启服务
-./service.sh status     # 查看服务状态
-./service.sh logs       # 查看日志（tail -f）
-./service.sh uninstall  # 卸载服务
+brew services start xbunax/tap/agent-tmux-notify
+brew services stop xbunax/tap/agent-tmux-notify
+brew services restart xbunax/tap/agent-tmux-notify
+brew services list
 ```
 
-日志路径：`~/Library/Logs/agent-tmux-notify/`
+日志路径：
+- `/opt/homebrew/var/log/agent-tmux-notify.log`
+- `/opt/homebrew/var/log/agent-tmux-notify.error.log`
+
+如果是通过源码并使用 `service.sh` 安装，仍可使用：
+
+```bash
+./service.sh start
+./service.sh stop
+./service.sh restart
+./service.sh status
+./service.sh logs
+./service.sh uninstall
+```
 
 ## 弹窗操作
 
@@ -200,7 +212,7 @@ agent_tmux_notify/
   tmux.py              tmux CLI 异步封装
 main.py                旧入口（兼容），等同于 cli.py
 config.toml.default    默认配置模板
-service.sh             macOS launchd 服务管理脚本（install 时动态生成 plist）
+service.sh             源码安装可选的 macOS launchd 服务辅助脚本
 ```
 
 ### 数据流

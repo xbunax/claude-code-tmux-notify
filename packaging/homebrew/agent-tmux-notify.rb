@@ -6,6 +6,7 @@ class AgentTmuxNotify < Formula
   url "https://github.com/xbunax/agent-tmux-notify/archive/refs/tags/v0.1.1.tar.gz"
   sha256 "0491a8de5e9a8c9426b91dbfc6b2975c7452b8f92c71749458aa3cac40bbd062"
   license "Apache-2.0"
+  revision 1
 
   depends_on "python@3.13"
 
@@ -31,6 +32,15 @@ class AgentTmuxNotify < Formula
 
   def install
     virtualenv_install_with_resources
+  end
+
+  service do
+    run [opt_bin/"agent-tmux-notify"]
+    keep_alive true
+    run_type :immediate
+    environment_variables PATH: std_service_path_env, LANG: "en_US.UTF-8"
+    log_path var/"log/agent-tmux-notify.log"
+    error_log_path var/"log/agent-tmux-notify.error.log"
   end
 
   test do

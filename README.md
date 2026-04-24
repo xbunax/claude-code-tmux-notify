@@ -40,6 +40,7 @@ Monitor Claude Code CLI instances inside tmux, automatically popping up an inter
 ```bash
 brew tap xbunax/tap
 brew install xbunax/tap/agent-tmux-notify
+brew services start xbunax/tap/agent-tmux-notify
 ```
 
 ### From Source
@@ -51,7 +52,7 @@ git clone <repo>
 cd agent-tmux-notify
 ```
 
-### One-Click Install (Recommended)
+### One-Click Install (Source Install)
 
 Use `service.sh` to install the CLI tool, deploy configuration files, and register the launchd service:
 
@@ -105,18 +106,29 @@ agent-tmux-notify -v
 
 ### Service Management
 
-Manage the macOS launchd background service via `service.sh`:
+For Homebrew installs, manage the launchd service via `brew services`:
 
 ```bash
-./service.sh start      # Start the service
-./service.sh stop       # Stop the service
-./service.sh restart    # Restart the service
-./service.sh status     # Check service status
-./service.sh logs       # View logs (tail -f)
-./service.sh uninstall  # Uninstall the service
+brew services start xbunax/tap/agent-tmux-notify
+brew services stop xbunax/tap/agent-tmux-notify
+brew services restart xbunax/tap/agent-tmux-notify
+brew services list
 ```
 
-Log path: `~/Library/Logs/agent-tmux-notify/`
+Log paths:
+- `/opt/homebrew/var/log/agent-tmux-notify.log`
+- `/opt/homebrew/var/log/agent-tmux-notify.error.log`
+
+If installed from source with `service.sh`, you can still use:
+
+```bash
+./service.sh start
+./service.sh stop
+./service.sh restart
+./service.sh status
+./service.sh logs
+./service.sh uninstall
+```
 
 ## Popup Controls
 
@@ -202,7 +214,7 @@ agent_tmux_notify/
   tmux.py              tmux CLI async wrapper
 main.py                Legacy entry point (compatibility), same as cli.py
 config.toml.default    Default configuration template
-service.sh             macOS launchd service management script (dynamically generates plist on install)
+service.sh             Optional macOS launchd service helper for source installs
 ```
 
 ### Data Flow
