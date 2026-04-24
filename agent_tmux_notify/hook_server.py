@@ -411,7 +411,7 @@ class HookServer:
             writer.write(_HTTP_200)
             await writer.drain()
 
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         except Exception:
             log.exception("Hook server handler error")
@@ -443,7 +443,18 @@ class HookServer:
         self.pending_permissions.register(request_key, pp)
 
         # Fire the callback (shows popup, resolves future when user decides)
-        asyncio.create_task(self._on_permission_request(request_key, pp))
+        async def _run_permission_callback() -> None:
+            try:
+                await self._on_permission_request(request_key, pp)
+            except Exception:
+                log.exception(
+                    "Permission callback failed for session %s",
+                    event.session_id[:8],
+                )
+                if not future.done():
+                    future.set_result({})
+
+        asyncio.create_task(_run_permission_callback())
 
         # Block HTTP connection until user decides or timeout
         try:
@@ -458,5 +469,16 @@ class HookServer:
             response = _build_json_response(decision)
         else:
             response = _HTTP_200  # empty = no decision, Claude Code falls back to terminal
-        writer.write(response)
-        await writer.drain()
+        log.info(
+            "Returning decision for session %s: %s",
+            event.session_id[:8],
+            "decision" if decision else "empty",
+        )
+        try:
+            writer.write(response)
+            await writer.drain()
+        except (ConnectionError, OSError):
+            log.debug(
+                "Client disconnected before permission response for session %s",
+                event.session_id[:8],
+            )

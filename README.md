@@ -194,7 +194,7 @@ agent_tmux_notify/
 main.py                旧入口（兼容），等同于 cli.py
 config.toml.default    默认配置模板
 service.sh             macOS launchd 服务管理脚本
-com.july.agent-tmux-notify.plist  LaunchAgent 配置
+                      （install 时动态生成 com.agent-tmux-notify.plist）
 ```
 
 ### 数据流
