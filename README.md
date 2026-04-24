@@ -193,8 +193,7 @@ agent_tmux_notify/
   tmux.py              tmux CLI 异步封装
 main.py                旧入口（兼容），等同于 cli.py
 config.toml.default    默认配置模板
-service.sh             macOS launchd 服务管理脚本
-                      （install 时动态生成 com.agent-tmux-notify.plist）
+service.sh             macOS launchd 服务管理脚本（install 时动态生成 plist）
 ```
 
 ### 数据流

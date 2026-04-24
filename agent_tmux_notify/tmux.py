@@ -62,26 +62,53 @@ async def send_keys_literal(pane_id: str, text: str) -> None:
     await _run("tmux", "send-keys", "-t", pane_id, "-l", text)
 
 
-async def get_active_pane_id() -> str | None:
-    """Return focused pane_id in daemon-safe way using pane/window/session flags."""
+async def is_pane_focused(pane_id: str) -> bool:
+    """Check if a pane is the active pane in the active window."""
     try:
-        fmt = (
-            "#{session_name}:#{window_index}.#{pane_index}\t"
-            "#{pane_active}\t#{window_active}\t#{session_attached}"
+        _, out, _ = await _run(
+            "tmux", "display-message", "-t", pane_id, "-p",
+            "#{pane_active} #{window_active}",
         )
-        _, out, _ = await _run("tmux", "list-panes", "-a", "-F", fmt)
-        fallback: str | None = None
+        parts = out.strip().split()
+        return len(parts) == 2 and parts[0] == "1" and parts[1] == "1"
+    except RuntimeError:
+        return False
+
+
+async def get_active_pane_id() -> str | None:
+    """Return the pane_id of the currently focused pane (session:window.pane).
+
+    Uses ``list-clients`` to find the most recently active client, then
+    ``display-message -c`` to get that client's actual focused pane.
+    This is reliable even from a launchd daemon and handles multiple
+    attached sessions correctly.
+    """
+    try:
+        # Find the most recently active client
+        _, out, _ = await _run(
+            "tmux", "list-clients", "-F",
+            "#{client_activity}\t#{client_tty}",
+        )
+        best_tty = None
+        best_activity = -1
         for line in out.strip().splitlines():
             parts = line.split("\t")
-            if len(parts) != 4:
+            if len(parts) != 2:
                 continue
-            pane_id, pane_active, window_active, session_attached = parts
-            if pane_active == "1" and window_active == "1":
-                if session_attached == "1":
-                    return pane_id
-                if fallback is None:
-                    fallback = pane_id
-        return fallback
+            activity = int(parts[0])
+            if activity > best_activity:
+                best_activity = activity
+                best_tty = parts[1]
+        if not best_tty:
+            return None
+
+        # Get the active pane from that client
+        _, out, _ = await _run(
+            "tmux", "display-message", "-c", best_tty, "-p",
+            "#{session_name}:#{window_index}.#{pane_index}",
+        )
+        pane_id = out.strip()
+        return pane_id if pane_id else None
     except RuntimeError:
         return None
 

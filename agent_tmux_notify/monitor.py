@@ -78,11 +78,37 @@ class Monitor:
         self.panes: dict[str, ClaudePane] = {}  # pane_id -> ClaudePane
         self.prev_states: dict[str, DetectedState] = {}
         self.active_popups: set[str] = set()
+        # Serialize popup display per pane so each tool gets its own popup
+        self._pane_locks: dict[str, asyncio.Lock] = {}
         # Debounce: pane_id -> first time NEEDS_INPUT was seen
         self._input_first_seen: dict[str, float] = {}
         # Track already-notified prompts: pane_id -> prompt_question
         # Prevents re-showing popup after user dismisses with ESC
         self._notified_prompts: dict[str, str] = {}
+
+    # --- Focus helper ---
+
+    async def _is_claude_pane_focused(self, pane_id: str | None = None) -> bool:
+        """Check if a Claude Code pane is currently focused.
+
+        If *pane_id* is given, checks whether that exact pane is focused.
+        Otherwise checks whether ANY known Claude Code pane is focused.
+        """
+        active = await tmux.get_active_pane_id()
+        if not active:
+            return False
+        if pane_id:
+            return active == pane_id
+        return active in self.panes
+
+    async def _is_focus_suppressed(self, pane_id: str | None, event_name: str) -> bool:
+        """Return True when a focused pane should suppress UI/notification for this event."""
+        if not pane_id:
+            return False
+        if await tmux.is_pane_focused(pane_id):
+            log.info("SKIP(focused): event=%s pane=%s", event_name, pane_id)
+            return True
+        return False
 
     async def run(self) -> None:
         log.info("Claude tmux monitor starting…")
@@ -211,7 +237,7 @@ class Monitor:
                 return
             del self._input_first_seen[pane_id]
             if pane_id not in self.active_popups:
-                if await self._is_claude_pane_focused(pane_id):
+                if await tmux.is_pane_focused(pane_id):
                     log.debug("Skipping popup for %s — pane is focused", pane_id)
                     return
                 self._notified_prompts[pane_id] = prompt_key
@@ -232,17 +258,8 @@ class Monitor:
             and prev is not None
             and prev.state == PaneState.WORKING
         ):
-            if not await self._is_claude_pane_focused(pane_id):
+            if not await tmux.is_pane_focused(pane_id):
                 asyncio.create_task(self._notify_completed(pane_id))
-
-    async def _is_claude_pane_focused(self, pane_id: str | None = None) -> bool:
-        """Check whether focused pane belongs to Claude panes; optional exact match."""
-        active = await tmux.get_active_pane_id()
-        if not active:
-            return False
-        if pane_id is not None:
-            return active == pane_id
-        return active in self.panes
 
     # --- Hook-driven callbacks ---
 
@@ -264,63 +281,86 @@ class Monitor:
     ) -> None:
         """Called by hook server when a PermissionRequest arrives."""
         pane_id = pp.pane_id
+        sid = pp.event.session_id[:8]
 
-        if not pane_id:
+        log.info(
+            "PermissionRequest callback: session=%s, pane=%s, tool=%s, cwd=%s",
+            sid, pane_id or "None", pp.event.tool_name or "?", pp.event.cwd or "?",
+        )
+
+        # Re-discover if correlation failed, then retry
+        if not pane_id and pp.event.cwd:
+            log.info("Correlation failed for session %s, re-discovering…", sid)
             await self._discover()
             pane_id = self.correlator.correlate(pp.event)
-            pp.pane_id = pane_id
+            if pane_id:
+                log.info(
+                    "Re-correlation succeeded: session %s -> pane %s",
+                    sid, pane_id,
+                )
+            else:
+                log.info("Re-correlation still failed for session %s", sid)
 
-        # Skip if pane is focused
-        if await self._is_claude_pane_focused(pane_id):
-            log.debug("Skipping hook popup for %s — pane is focused", pane_id)
+        # Skip if pane is focused — user can see the permission prompt directly
+        if await self._is_focus_suppressed(pane_id, "PermissionRequest"):
+            log.info("PermissionRequest suppressed for focused pane: session=%s", sid)
             self.pending_permissions.resolve(request_key, {})
             return
 
-        # Skip if popup already active for this pane
-        if pane_id and pane_id in self.active_popups:
-            log.debug("Skipping hook popup for %s — popup already active", pane_id)
-            self.pending_permissions.resolve(request_key, {})
-            return
+        # Acquire per-pane lock so each tool gets its own popup sequentially
+        lock = self._pane_locks.setdefault(pane_id, asyncio.Lock()) if pane_id else None
+        if lock:
+            await lock.acquire()
+            log.info("Acquired pane lock for session=%s, pane=%s, tool=%s", sid, pane_id, pp.event.tool_name or "?")
+            # Re-check focus after acquiring lock — user may have switched panes while queued
+            if await self._is_focus_suppressed(pane_id, "PermissionRequest"):
+                log.info("PermissionRequest suppressed after lock: session=%s", sid)
+                self.pending_permissions.resolve(request_key, {})
+                lock.release()
+                return
 
-        # Get cached PreToolUse events for context enrichment
-        pretooluse_events = self.hook_store.get_recent(
-            pp.event.session_id, "PreToolUse"
-        )
-
-        # Parse tmux buffer for options (auxiliary)
-        buffer_options: list[str] = []
-        buffer_selected = 0
-        if pane_id:
-            buffer_options, buffer_selected = await extract_options_from_buffer(
-                pane_id, self.triggers, self.config.buffer_lines
+        try:
+            # Get cached PreToolUse events for context enrichment
+            pretooluse_events = self.hook_store.get_recent(
+                pp.event.session_id, "PreToolUse"
             )
 
-        # Build TriggerEvent from hook data + PreToolUse context + buffer options
-        event = await build_trigger_event_from_hook(
-            pane_id, pp.event, pp.raw_payload,
-            pretooluse_context=pretooluse_events,
-            buffer_options=buffer_options,
-            buffer_selected_index=buffer_selected,
-        )
+            # Parse tmux buffer for options (auxiliary)
+            buffer_options: list[str] = []
+            buffer_selected = 0
+            if pane_id:
+                buffer_options, buffer_selected = await extract_options_from_buffer(
+                    pane_id, self.triggers, self.config.buffer_lines
+                )
 
-        # Plan scenario: support Ctrl-G edit loop
-        if event.scenario == "plan":
-            result = await self._show_plan_popup(pane_id or "", event)
-        else:
-            result = await self._show_popup_and_get_result(pane_id or "", event)
+            # Build TriggerEvent from hook data + PreToolUse context + buffer options
+            event = await build_trigger_event_from_hook(
+                pane_id, pp.event, pp.raw_payload,
+                pretooluse_context=pretooluse_events,
+                buffer_options=buffer_options,
+                buffer_selected_index=buffer_selected,
+            )
 
-        # Focus pane if requested
-        if result == "focus" and pane_id:
-            await self._focus_pane(pane_id)
+            # Plan scenario: support Ctrl-G edit loop
+            if event.scenario == "plan":
+                result = await self._show_plan_popup(pane_id or "", event)
+            else:
+                result = await self._show_popup_and_get_result(pane_id or "", event)
 
-        # Map result to hook decision (with cross-validation)
-        decision = self._map_result_to_decision(result, event, pp.raw_payload)
-        log.info(
-            "Permission decision for session %s: %s",
-            pp.event.session_id[:8],
-            decision if decision else {},
-        )
-        self.pending_permissions.resolve(request_key, decision)
+            # Focus pane if requested
+            if result == "focus" and pane_id:
+                await self._focus_pane(pane_id)
+
+            # Map result to hook decision (with cross-validation)
+            decision = self._map_result_to_decision(result, event, pp.raw_payload)
+            log.info(
+                "Permission decision for session %s: result=%r -> decision=%s",
+                pp.event.session_id[:8], result, decision,
+            )
+            self.pending_permissions.resolve(request_key, decision)
+        finally:
+            if lock:
+                lock.release()
 
     async def _on_notification(
         self, event: HookEvent, pane_id: str | None, raw_payload: dict
@@ -337,15 +377,15 @@ class Monitor:
             return
 
         # Other notification types: simple popup
+        active = await tmux.get_active_pane_id()
         if not pane_id:
-            active = await tmux.get_active_pane_id()
             if active:
                 pane_id = active
             else:
                 log.debug("Notification received but no pane to show it on")
                 return
 
-        if await self._is_claude_pane_focused(pane_id):
+        if await self._is_focus_suppressed(pane_id, "Notification"):
             return
 
         message = raw_payload.get("message", "Claude Code notification")
@@ -354,7 +394,6 @@ class Monitor:
             safe_msg = message.replace('"', '\\"')
             cmd = ["bash", "-c", f'echo "{safe_msg}"; sleep 3']
             pcfg = self.config.popup
-            active = await tmux.get_active_pane_id()
             target = active if active else pane_id
             await tmux.display_popup(
                 target, cmd, width="50", height="3",
@@ -371,9 +410,12 @@ class Monitor:
     ) -> None:
         """Show a notification popup when Claude is waiting for input."""
         if not pane_id:
-            return
+            # No pane correlation — check if any Claude pane is focused
+            if await self._is_claude_pane_focused():
+                return
+            return  # Can't show popup without a target pane
 
-        if await self._is_claude_pane_focused(pane_id):
+        if await self._is_focus_suppressed(pane_id, "Notification(idle_prompt)"):
             return  # Already focused, no notification needed
 
         if pane_id in self.active_popups:
@@ -415,23 +457,23 @@ class Monitor:
             # Cross-validate: map buffer option text to hook decision
             text_lower = selected_text.lower()
             if "deny" in text_lower:
-                return {"decision": "deny"}
+                return {"behavior": "deny"}
             if "always allow" in text_lower or "always approve" in text_lower:
                 return self._build_always_allow_decision(selected_text, raw_payload)
             if "allow" in text_lower or "approve" in text_lower:
-                return {"decision": "allow"}
+                return {"behavior": "allow"}
 
             # Fallback: first option = allow, others = deny
             if idx == 0:
-                return {"decision": "allow"}
-            return {"decision": "deny"}
+                return {"behavior": "allow"}
+            return {"behavior": "deny"}
 
         if result == "focus":
             return {}  # user wants to handle in terminal
 
         if result.startswith("custom:"):
             text = result.split(":", 1)[1]
-            return {"decision": "deny", "message": text}
+            return {"behavior": "deny", "message": text}
 
         return {}
 
@@ -451,11 +493,11 @@ class Monitor:
                 # Match the "Always Allow: xxx" text back to the suggestion
                 if content and content in selected_text:
                     return {
-                        "decision": "allow",
+                        "behavior": "allow",
                         "updatedPermissions": [sug],
                     }
         # Fallback: plain allow if no matching suggestion found
-        return {"decision": "allow"}
+        return {"behavior": "allow"}
 
     # --- Popup display ---
 
@@ -464,6 +506,7 @@ class Monitor:
     ) -> str | None:
         """Show popup and return the raw result string."""
         if pane_id and pane_id in self.active_popups:
+            log.info("_show_popup: SKIP pane=%s already in active_popups", pane_id)
             return None
         if pane_id:
             self.active_popups.add(pane_id)
@@ -491,7 +534,9 @@ class Monitor:
                 active = await tmux.get_active_pane_id()
                 target = active if active else pane_id
                 if not target:
+                    log.info("_show_popup: no target pane (active=%s, pane_id=%r)", active, pane_id)
                     return None
+                log.info("_show_popup: showing on target=%s (active=%s, pane_id=%r)", target, active, pane_id)
                 rc = await tmux.display_popup(
                     target, cmd, title=title,
                     width=pcfg.width, height=pcfg.height,
@@ -501,6 +546,7 @@ class Monitor:
                 if rc == 0 and os.path.exists(result_file):
                     with open(result_file) as f:
                         return f.read().strip()
+                log.info("_show_popup: popup returned rc=%d, result_file_exists=%s", rc, os.path.exists(result_file))
                 return None
             finally:
                 for f in (result_file, config_file):
@@ -708,10 +754,10 @@ class Monitor:
     # --- Completion notification ---
 
     async def _notify_completed(self, pane_id: str) -> None:
+        if await self._is_focus_suppressed(pane_id, "Completed"):
+            return
         log.info("Task completed in %s", pane_id)
         try:
-            if await self._is_claude_pane_focused(pane_id):
-                return
             cmd = ["bash", "-c", 'echo "✓ Claude Code task completed"; sleep 2']
             pcfg = self.config.popup
             active = await tmux.get_active_pane_id()

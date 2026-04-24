@@ -411,7 +411,7 @@ class HookServer:
             writer.write(_HTTP_200)
             await writer.drain()
 
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError, OSError):
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             pass
         except Exception:
             log.exception("Hook server handler error")
@@ -443,7 +443,8 @@ class HookServer:
         self.pending_permissions.register(request_key, pp)
 
         # Fire the callback (shows popup, resolves future when user decides)
-        async def _run_permission_callback() -> None:
+        # Wrap in error-safe handler so exceptions don't leave the future unresolved
+        async def _safe_permission_callback() -> None:
             try:
                 await self._on_permission_request(request_key, pp)
             except Exception:
@@ -454,7 +455,7 @@ class HookServer:
                 if not future.done():
                     future.set_result({})
 
-        asyncio.create_task(_run_permission_callback())
+        asyncio.create_task(_safe_permission_callback())
 
         # Block HTTP connection until user decides or timeout
         try:
@@ -465,20 +466,25 @@ class HookServer:
             self.pending_permissions.resolve(request_key, decision)
 
         # Return decision as HTTP response
-        if decision:
-            response = _build_json_response(decision)
-        else:
-            response = _HTTP_200  # empty = no decision, Claude Code falls back to terminal
         log.info(
             "Returning decision for session %s: %s",
-            event.session_id[:8],
-            "decision" if decision else "empty",
+            event.session_id[:8], decision,
         )
+        if decision:
+            response_body = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": decision,
+                }
+            }
+            response = _build_json_response(response_body)
+        else:
+            response = _HTTP_200  # empty = no decision, Claude Code falls back to terminal
         try:
             writer.write(response)
             await writer.drain()
-        except (ConnectionError, OSError):
-            log.debug(
-                "Client disconnected before permission response for session %s",
-                event.session_id[:8],
+        except (ConnectionError, OSError) as e:
+            log.warning(
+                "Failed to send decision for session %s: %s",
+                event.session_id[:8], e,
             )

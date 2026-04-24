@@ -6,7 +6,6 @@ PLIST_NAME="${LABEL}.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_DST="$HOME/Library/LaunchAgents/${PLIST_NAME}"
 LOG_DIR="$HOME/Library/Logs/agent-tmux-notify"
-CLI_BIN="$HOME/.local/bin/agent-tmux-notify"
 
 usage() {
     echo "Usage: $0 {install|uninstall|start|stop|restart|status|logs}"
@@ -36,6 +35,9 @@ cmd_install() {
     echo "Installing CLI tool via uv..."
     uv tool install --editable "$SCRIPT_DIR" --force
     mkdir -p "$LOG_DIR"
+
+    # Generate plist dynamically with current user's HOME
+    local BIN_PATH="$HOME/.local/bin/agent-tmux-notify"
     cat > "$PLIST_DST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,7 +47,7 @@ cmd_install() {
     <string>${LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${CLI_BIN}</string>
+        <string>${BIN_PATH}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -69,7 +71,7 @@ cmd_install() {
 </dict>
 </plist>
 EOF
-    echo "Plist installed to $PLIST_DST"
+    echo "Plist generated at $PLIST_DST"
     install_config
     echo "Run '$0 start' to start the service."
 }
