@@ -3,10 +3,9 @@ class AgentTmuxNotify < Formula
 
   desc "Monitor Claude Code CLI instances inside tmux panes"
   homepage "https://github.com/xbunax/agent-tmux-notify"
-  url "https://github.com/xbunax/agent-tmux-notify/archive/refs/tags/v0.1.1.tar.gz"
-  sha256 "0491a8de5e9a8c9426b91dbfc6b2975c7452b8f92c71749458aa3cac40bbd062"
+  url "https://github.com/xbunax/agent-tmux-notify/archive/refs/tags/v0.1.2.tar.gz"
+  sha256 "99a166046504580fdddc2386db114c4cd7f609e041c6bffd4b13b8dd2962b7dc"
   license "Apache-2.0"
-  revision 1
 
   depends_on "python@3.13"
 
