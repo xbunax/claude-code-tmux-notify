@@ -415,23 +415,23 @@ class Monitor:
             # Cross-validate: map buffer option text to hook decision
             text_lower = selected_text.lower()
             if "deny" in text_lower:
-                return {"decision": "deny"}
+                return {"behavior": "deny"}
             if "always allow" in text_lower or "always approve" in text_lower:
                 return self._build_always_allow_decision(selected_text, raw_payload)
             if "allow" in text_lower or "approve" in text_lower:
-                return {"decision": "allow"}
+                return {"behavior": "allow"}
 
             # Fallback: first option = allow, others = deny
             if idx == 0:
-                return {"decision": "allow"}
-            return {"decision": "deny"}
+                return {"behavior": "allow"}
+            return {"behavior": "deny"}
 
         if result == "focus":
             return {}  # user wants to handle in terminal
 
         if result.startswith("custom:"):
             text = result.split(":", 1)[1]
-            return {"decision": "deny", "message": text}
+            return {"behavior": "deny", "message": text}
 
         return {}
 
@@ -451,11 +451,11 @@ class Monitor:
                 # Match the "Always Allow: xxx" text back to the suggestion
                 if content and content in selected_text:
                     return {
-                        "decision": "allow",
+                        "behavior": "allow",
                         "updatedPermissions": [sug],
                     }
         # Fallback: plain allow if no matching suggestion found
-        return {"decision": "allow"}
+        return {"behavior": "allow"}
 
     # --- Popup display ---
 

@@ -466,7 +466,13 @@ class HookServer:
 
         # Return decision as HTTP response
         if decision:
-            response = _build_json_response(decision)
+            response_body = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": decision,
+                }
+            }
+            response = _build_json_response(response_body)
         else:
             response = _HTTP_200  # empty = no decision, Claude Code falls back to terminal
         log.info(
