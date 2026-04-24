@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=82.0.1", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agent-tmux-notify"
-version = "0.1.0"
+version = "0.1.1"
 description = "Monitor Claude Code CLI in tmux panes"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -8,3 +12,6 @@ dependencies = ["rich>=13.0", "pygments>=2.16"]
 
 [project.scripts]
 agent-tmux-notify = "agent_tmux_notify.cli:main"
+
+[tool.setuptools]
+packages = ["agent_tmux_notify"]
