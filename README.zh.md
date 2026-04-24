@@ -263,3 +263,7 @@ Claude Code ──[hook HTTP POST]──► HookServer (localhost:19836)
 ```
 
 `hook_data` 在 hook 服务器未启用或未匹配到事件时为 `null`。
+
+## 友情链接
+
+- https://linux.do

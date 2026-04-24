@@ -265,3 +265,7 @@ The popup receives data via a temporary JSON file:
 ```
 
 `hook_data` is `null` when the hook server is disabled or no hook event matched.
+
+## Friendly Links
+
+- https://linux.do
