@@ -33,6 +33,15 @@
 
 ## 安装
 
+### Homebrew（通过 tap）
+
+```bash
+brew tap xbunax/tap
+brew install xbunax/tap/agent-tmux-notify
+```
+
+### 源码安装
+
 需要 Python 3.13+ 和 [uv](https://github.com/astral-sh/uv)。
 
 ```bash

@@ -35,6 +35,15 @@ Monitor Claude Code CLI instances inside tmux, automatically popping up an inter
 
 ## Installation
 
+### Homebrew (via tap)
+
+```bash
+brew tap xbunax/tap
+brew install xbunax/tap/agent-tmux-notify
+```
+
+### From Source
+
 Requires Python 3.13+ and [uv](https://github.com/astral-sh/uv).
 
 ```bash
